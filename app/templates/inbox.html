@@ -23,10 +23,11 @@
   <select name="days" onchange="this.form.submit()"><option value="0">Any time</option>{% for dd, lbl in [(1,'Yesterday & today'),(7,'Last 7 days'),(30,'Last 30 days'),(90,'Last 90 days')] %}<option value="{{ dd }}" {% if dd==days %}selected{% endif %}>{{ lbl }}</option>{% endfor %}</select>
   <button class="ghost">Apply</button>
   {% if q or brand or location_id or rating or group_id or days %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
-  <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
+  <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if sort %} · sorted by {{ sort }}{% elif view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
 </form>
 <div class="card table-scroll" style="padding:0">
-<table class="inbox"><thead><tr><th>Rating</th><th>Site</th><th>Review</th><th>Author</th><th>Posted</th><th>Status</th><th></th></tr></thead><tbody>
+{% macro sh(key, label) -%}{% set on = (sort == key) %}<th><a class="sort {% if on %}on{% endif %}" href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ key }}&dir={{ 'desc' if (on and dir == 'asc') else 'asc' }}">{{ label }} {% if on %}{{ '↑' if dir == 'asc' else '↓' }}{% else %}<span class="muted">↕</span>{% endif %}</a></th>{%- endmacro %}
+<table class="inbox" data-server-sort><thead><tr>{{ sh('rating','Rating') }}{{ sh('site','Site') }}<th>Review</th>{{ sh('author','Author') }}{{ sh('created','Posted') }}{{ sh('status','Status') }}<th></th></tr></thead><tbody>
 {% for r in reviews %}
 <tr class="clickable" onclick="if(!event.target.closest('a,button,form'))location.href='/reviews/{{ r.id }}'">
   <td style="white-space:nowrap">{{ source_icon(r) }} {{ stars(r) }}</td>
@@ -40,7 +41,7 @@
 {% else %}<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='mine' %}You have no claimed reviews.{% elif view=='failed' %}No failed posts.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 </div>
-<div class="pager">{% if page>1 %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&page={{ page-1 }}">&larr; Previous</a>{% endif %}
+<div class="pager">{% if page>1 %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ sort }}&dir={{ dir }}&page={{ page-1 }}">&larr; Previous</a>{% endif %}
 <span class="muted small">Page {{ page }} of {{ ((total-1)//per_page)+1 if total else 1 }}</span>
-{% if page*per_page < total %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&page={{ page+1 }}">Next &rarr;</a>{% endif %}</div>
+{% if page*per_page < total %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ sort }}&dir={{ dir }}&page={{ page+1 }}">Next &rarr;</a>{% endif %}</div>
 {% endblock %}

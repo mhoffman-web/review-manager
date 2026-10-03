@@ -13,9 +13,9 @@
 </div>
 <div class="grid side">
   <div class="card table-scroll" style="padding:0">
-    <table><thead><tr><th>#</th><th>Name</th><th>Site(s)</th><th class="num">Mentions</th><th class="num">Avg ★</th><th class="num">Neg</th><th>Last</th><th>Example</th></tr></thead><tbody>
-    {% for e in rep.rows %}<tr><td class="muted">{{ loop.index }}</td><td><strong>{{ e.name }}</strong>{% if not e.on_roster %}<div class="muted small">not on roster{% if user.is_admin %} · <a href="/admin/employees">add</a>{% endif %}</div>{% endif %}</td><td class="small">{{ e.sites }}</td>
-    <td class="num"><strong>{{ e.count }}</strong></td><td class="num">{{ e.avg or '–' }}</td><td class="num" {% if e.negatives %}style="color:var(--critical)"{% endif %}>{{ e.negatives }}</td><td class="ink2 small">{{ e.last|age }} ago</td>
+    <table><thead><tr><th data-nosort>#</th><th>Name</th><th>Site(s)</th><th class="num">Mentions</th><th class="num">Avg ★</th><th class="num">Neg</th><th>Last</th><th data-nosort>Example</th></tr></thead><tbody>
+    {% for e in rep.rows %}<tr><td class="muted">{{ loop.index }}</td><td data-sort="{{ e.name }}"><strong>{{ e.name }}</strong>{% if not e.on_roster %}<div class="muted small">not on roster{% if user.is_admin %} · <a href="/admin/employees">add</a>{% endif %}</div>{% endif %}</td><td class="small">{{ e.sites }}</td>
+    <td class="num"><strong>{{ e.count }}</strong></td><td class="num">{{ e.avg or '–' }}</td><td class="num" {% if e.negatives %}style="color:var(--critical)"{% endif %}>{{ e.negatives }}</td><td class="ink2 small" data-sort="{{ e.last.isoformat() if e.last else '' }}">{{ e.last|age }} ago</td>
     <td class="small">{% if e.examples %}<a href="/reviews/{{ e.examples[0].id }}">{{ (e.examples[0].text or '')[:110] }}{% if e.examples[0].text and e.examples[0].text|length > 110 %}…{% endif %}</a>{% endif %}</td></tr>
     {% else %}<tr><td colspan="8" class="muted" style="padding:24px;text-align:center">No employee mentions detected in this window.</td></tr>{% endfor %}</tbody></table></div>
   <div>

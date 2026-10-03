@@ -33,12 +33,12 @@
 <div class="grid two">
   <div class="card table-scroll"><h3>Summary by month</h3>
     <table><thead><tr><th>Month</th><th class="num">Rating</th><th class="num">Reviews</th><th class="num">Positive</th><th class="num">Neutral</th><th class="num">Negative</th><th class="num">Resp. rate</th><th class="num">Median resp.</th></tr></thead><tbody>
-    {% for m in monthly %}<tr><td>{{ m.label }}</td><td class="num">{{ m.avg or '–' }}</td><td class="num">{{ m.n }}</td><td class="num">{{ m.positive }}</td><td class="num">{{ m.neutral }}</td><td class="num" {% if m.n and m.negative/m.n > 0.08 %}style="color:var(--critical)"{% endif %}>{{ m.negative }}</td><td class="num">{% if m.response_rate is not none %}{{ m.response_rate|int }}%{% else %}–{% endif %}</td><td class="num">{{ m.median_response_h|hours }}</td></tr>{% endfor %}</tbody></table>
+    {% for m in monthly %}<tr><td data-sort="{{ m.month }}">{{ m.label }}</td><td class="num">{{ m.avg or '–' }}</td><td class="num">{{ m.n }}</td><td class="num">{{ m.positive }}</td><td class="num">{{ m.neutral }}</td><td class="num" {% if m.n and m.negative/m.n > 0.08 %}style="color:var(--critical)"{% endif %}>{{ m.negative }}</td><td class="num">{% if m.response_rate is not none %}{{ m.response_rate|int }}%{% else %}–{% endif %}</td><td class="num" data-sort="{{ m.median_response_h if m.median_response_h is not none else '' }}">{{ m.median_response_h|hours }}</td></tr>{% endfor %}</tbody></table>
     <p class="muted small" style="margin:8px 0 0">Positive = 4–5★, neutral = 3★, negative = 1–2★ (Synup convention). The tiles above use ≤3★ as negative.</p></div>
   <div>
     <div class="card table-scroll"><h3>Replies by team member (30d)</h3>
       <table><thead><tr><th>Who</th><th class="num">Replies</th><th class="num">Median time</th><th class="num">p90</th><th class="num">Negatives</th><th class="num">Template</th><th class="num">AI</th></tr></thead><tbody>
-      {% for p in responders %}<tr><td>{{ p.name }}</td><td class="num">{{ p.count }}</td><td class="num">{{ p.median_h|hours }}</td><td class="num">{{ p.p90_h|hours }}</td><td class="num">{{ p.negatives }}</td><td class="num">{{ p.template_pct }}%</td><td class="num">{{ p.ai_pct }}%</td></tr>
+      {% for p in responders %}<tr><td>{{ p.name }}</td><td class="num">{{ p.count }}</td><td class="num" data-sort="{{ p.median_h if p.median_h is not none else '' }}">{{ p.median_h|hours }}</td><td class="num" data-sort="{{ p.p90_h if p.p90_h is not none else '' }}">{{ p.p90_h|hours }}</td><td class="num">{{ p.negatives }}</td><td class="num">{{ p.template_pct }}%</td><td class="num">{{ p.ai_pct }}%</td></tr>
       {% else %}<tr><td colspan="7" class="muted">No replies posted through this app yet.</td></tr>{% endfor %}</tbody></table></div>
     <div class="card table-scroll"><h3>Location rank (12 months)</h3>
       <div class="bars">{% for s in rank %}<span class="small"><span class="dot {{ s.brand }}"></span>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</span><span class="bar"><i style="width:{{ (100*((s.avg or 0)-3)/2)|int if (s.avg or 0) > 3 else 2 }}%"></i></span><span class="num small">{{ s.avg or '–' }} <span class="muted">({{ s.n }})</span></span>{% endfor %}</div></div>
@@ -52,14 +52,14 @@
   {% for s in d.sites %}
   {% if s.brand != ns.brand %}{% set ns.brand = s.brand %}<tr class="brand-row"><td colspan="10"><span class="dot {{ s.brand }}"></span>{{ s.brand }}</td></tr>{% endif %}
   <tr class="clickable" onclick="location.href='/sites/{{ s.location_id }}'">
-    <td>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>
+    <td data-sort="{{ s.name }}">{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>
     <td class="num" {% if s.new_24h %}style="font-weight:600"{% endif %}>{{ s.new_24h }}</td>
     <td class="num" {% if s.avg_7d and s.avg_7d < 4 %}style="color:var(--critical)"{% endif %}>{{ s.avg_7d or '–' }}</td>
     <td class="num">{{ s.avg_30d or '–' }}</td><td class="num">{{ s.count_30d }}</td><td class="num">{{ s.negative_30d }}</td>
     <td class="num">{% if s.response_rate_30d is not none %}{{ s.response_rate_30d|int }}%{% else %}–{% endif %}</td>
-    <td class="num">{{ s.median_response_h_30d|hours }}</td>
-    <td class="num">{{ s.unanswered }}{% if s.overdue %} <span class="pill bad">{{ s.overdue }}</span>{% endif %}</td>
-    <td class="num muted">{{ s.listing_avg or '–' }}{% if s.listing_total %} <span class="small">({{ s.listing_total }})</span>{% endif %}</td>
+    <td class="num" data-sort="{{ s.median_response_h_30d if s.median_response_h_30d is not none else '' }}">{{ s.median_response_h_30d|hours }}</td>
+    <td class="num" data-sort="{{ s.unanswered }}">{{ s.unanswered }}{% if s.overdue %} <span class="pill bad">{{ s.overdue }}</span>{% endif %}</td>
+    <td class="num muted" data-sort="{{ s.listing_avg or '' }}">{{ s.listing_avg or '–' }}{% if s.listing_total %} <span class="small">({{ s.listing_total }})</span>{% endif %}</td>
   </tr>{% endfor %}</tbody></table></div>
   <div>
     <div class="card"><h3>Rating mix (30d)</h3><div class="chart-wrap" style="height:170px"><canvas id="cDist"></canvas></div></div>

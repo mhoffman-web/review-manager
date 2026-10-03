@@ -145,3 +145,24 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     g = s.execute(select(SiteGroup)).scalar_one()
     assert [l.id for l in g.locations] == [loc.id]
     assert c.get(f"/?group_id={g.id}&view=all").status_code == 200
+
+
+def test_inbox_server_sort(db):
+    from fastapi.testclient import TestClient
+    from app.web import app
+    s, loc, link = db
+    u = s.execute(select(User)).scalar_one()
+    mk(s, link, "s1", 5, "Alpha great", author="Zed A", days_ago=3)
+    mk(s, link, "s2", 1, "Beta awful", author="Amy B", days_ago=1)
+    mk(s, link, "s3", 3, "Gamma meh", author="Mel C", days_ago=2)
+    s.commit()
+    c = TestClient(app)
+    c.cookies.set(auth.COOKIE_NAME, auth.make_session_cookie(u))
+    html = c.get("/?view=all&sort=rating&dir=asc").text
+    assert html.index("Beta awful") < html.index("Gamma meh") < html.index("Alpha great")
+    html = c.get("/?view=all&sort=rating&dir=desc").text
+    assert html.index("Alpha great") < html.index("Gamma meh") < html.index("Beta awful")
+    html = c.get("/?view=all&sort=author&dir=asc").text
+    assert html.index("Amy B") < html.index("Mel C") < html.index("Zed A")
+    assert "sorted by author" in html and 'data-server-sort' in html
+    assert c.get("/?view=all&sort=bogus").status_code == 200

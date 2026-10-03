@@ -106,3 +106,11 @@ details.inline-form summary { list-style:none; display:inline-block; } details.i
 .ms-btn { display:flex; gap:10px; align-items:center; justify-content:center; width:100%; padding:10px 14px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-weight:600; text-decoration:none; }
 .ms-btn:hover { background:var(--surface-2); text-decoration:none; }
 .or { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px; margin:14px 0 6px; } .or:before, .or:after { content:""; flex:1; border-top:1px solid var(--line); }
+
+th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+th.sortable:hover { color:var(--ink); }
+th.sortable::after { content:"\2195"; opacity:.35; margin-left:4px; font-size:10px; }
+th.sortable[aria-sort="ascending"]::after { content:"\2191"; opacity:1; color:var(--accent); }
+th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; color:var(--accent); }
+tr.sort-hidden { display:none; }
+th a.sort { color:inherit; text-decoration:none; } th a.sort:hover { color:var(--ink); } th a.sort.on { color:var(--accent); }

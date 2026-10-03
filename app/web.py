@@ -248,7 +248,7 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
 @app.get("/", response_class=HTMLResponse)
 def inbox(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
           view: str = "attention", brand: str = "", location_id: int = 0, group_id: int = 0, rating: str = "", q: str = "",
-          days: int = 0, sv: int = 0, page: int = 1):
+          days: int = 0, sv: int = 0, page: int = 1, sort: str = "", dir: str = "asc"):
     per_page = 50
     saved_views = db.execute(select(SavedView).where(or_(SavedView.is_shared.is_(True), SavedView.owner_id == user.id))
                              .order_by(SavedView.sort_order, SavedView.name)).scalars().all()
@@ -268,6 +268,15 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
         g = next((g for g in groups if g.id == group_id), None)
         group_loc_ids = [l.id for l in g.locations] if g else []
     base, order = _inbox_query(user, view, brand, location_id, group_id, rating, q, days, overdue_cut, group_loc_ids)
+    dir = "desc" if dir == "desc" else "asc"
+    sort_cols = {
+        "rating": (Review.rating,), "site": (Location.name,), "author": (Review.author_name,), "created": (Review.created_at_source,),
+        "status": (Review.has_owner_reply, Review.rating, Review.created_at_source),
+    }
+    if sort in sort_cols:
+        order = tuple((c.desc() if dir == "desc" else c.asc()) for c in sort_cols[sort]) + (Review.created_at_source.desc(),)
+    else:
+        sort = ""
     total = db.execute(select(func.count()).select_from(base.order_by(None).subquery())).scalar() or 0
     rows = db.execute(base.order_by(*order).offset((page - 1) * per_page).limit(per_page)).scalars().all()
 
@@ -288,7 +297,8 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     return _render(request, "inbox.html", user, db, reviews=rows, total=total, page=page, per_page=per_page,
                    view=view, views=VIEWS, brand=brand, location_id=location_id, group_id=group_id, groups=groups, rating=rating, q=q, days=days,
                    counts=counts, locations=locations, brands=_brands(db), overdue_cut=overdue_cut,
-                   saved_views=saved_views, active_view=active_view, qs=qs, current_params_json=json.dumps(current_params))
+                   saved_views=saved_views, active_view=active_view, qs=qs, current_params_json=json.dumps(current_params),
+                   sort=sort, dir=dir)
 
 
 @app.post("/views")

@@ -44,8 +44,8 @@
 
   {% if r.responses %}
   <div class="card"><h3>History</h3>
-  <table><thead><tr><th>When</th><th>Who</th><th>Status</th><th>Text</th></tr></thead><tbody>
-  {% for h in r.responses|reverse %}<tr><td class="ink2" style="white-space:nowrap">{{ h.created_at|local }}</td><td>{{ h.created_by.name if h.created_by else '—' }}{% if h.ai_generated %}<div class="muted small">AI draft</div>{% elif h.template_id %}<div class="muted small">template</div>{% endif %}</td>
+  <table><thead><tr><th>When</th><th>Who</th><th>Status</th><th data-nosort>Text</th></tr></thead><tbody>
+  {% for h in r.responses|reverse %}<tr><td class="ink2" style="white-space:nowrap" data-sort="{{ h.created_at.isoformat() }}">{{ h.created_at|local }}</td><td>{{ h.created_by.name if h.created_by else '—' }}{% if h.ai_generated %}<div class="muted small">AI draft</div>{% elif h.template_id %}<div class="muted small">template</div>{% endif %}</td>
   <td><span class="pill {% if h.status=='posted' %}good{% elif h.status=='failed' %}bad{% endif %}">{{ h.status }}</span>{% if h.error %}<div class="muted small">{{ h.error[:300] }}</div>{% endif %}</td>
   <td class="review-text" style="font-size:13px">{{ h.text }}</td></tr>{% endfor %}</tbody></table></div>
   {% endif %}

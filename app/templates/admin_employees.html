@@ -9,7 +9,7 @@
   {% else %}<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">No roster yet. Add people below, or promote names from the detected list.</td></tr>{% endfor %}</tbody></table></div>
   <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Detected names not on the roster <span class="muted">· last 180 days</span></h3>
   <table><thead><tr><th>Name</th><th class="num">Mentions</th><th>Mostly at</th><th>Last</th><th></th></tr></thead><tbody>
-  {% for c in candidates %}<tr><td>{{ c.name }}</td><td class="num">{{ c.count }}</td><td class="small">{{ c.site }}</td><td class="ink2 small">{{ c.last|age }} ago</td>
+  {% for c in candidates %}<tr><td>{{ c.name }}</td><td class="num">{{ c.count }}</td><td class="small">{{ c.site }}</td><td class="ink2 small" data-sort="{{ c.last.isoformat() if c.last else '' }}">{{ c.last|age }} ago</td>
   <td><form method="post" action="/admin/employees" style="display:inline"><input type="hidden" name="name" value="{{ c.name }}"><input type="hidden" name="location_id" value="{{ c.location_id or 0 }}"><button class="ghost small">Add to roster</button></form></td></tr>
   {% else %}<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">Everything detected is already on the roster.</td></tr>{% endfor %}</tbody></table></div>
 </div>

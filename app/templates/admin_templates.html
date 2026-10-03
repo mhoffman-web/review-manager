@@ -5,12 +5,12 @@
 <div>
 {% for band, tpls in groups %}
 <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">{{ band }} <span class="muted">· {{ tpls|length }}</span></h3>
-<table><thead><tr><th>Name</th><th>Fits</th><th>Body</th><th class="num">Used</th><th>Updated</th><th></th></tr></thead><tbody>
+<table><thead><tr><th>Name</th><th>Fits</th><th data-nosort>Body</th><th class="num">Used</th><th>Updated</th><th></th></tr></thead><tbody>
 {% for t in tpls %}<tr style="{% if not t.active %}opacity:.55{% endif %}"><td><strong>{{ t.name }}</strong>{% if t.brand %}<div class="muted small">{{ t.brand }} only</div>{% endif %}{% if not t.active %}<div class="muted small">inactive</div>{% endif %}</td>
 <td class="small">{% for tag in t.tag_list() %}<span class="pill small">{{ tag }}</span> {% endfor %}</td>
 <td class="small" style="white-space:pre-wrap;max-width:380px">{{ t.body }}</td>
 <td class="num">{{ t.usage_count or 0 }}</td>
-<td class="muted small">{{ t.updated_by.name.split()[0] if t.updated_by else '' }} {{ t.updated_at|local('%b %-d') }}</td>
+<td class="muted small" data-sort="{{ t.updated_at.isoformat() if t.updated_at else '' }}">{{ t.updated_by.name.split()[0] if t.updated_by else '' }} {{ t.updated_at|local('%b %-d') }}</td>
 <td style="white-space:nowrap">{% if user.is_admin %}<a class="small" href="/admin/templates?edit={{ t.id }}">Edit</a> · <form method="post" action="/admin/templates/{{ t.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this template?')"><button class="ghost small">Delete</button></form>{% endif %}</td></tr>{% endfor %}
 </tbody></table></div>
 {% else %}<div class="card muted">No templates yet.</div>{% endfor %}
