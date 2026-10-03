@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('groups') }}
+<div class="grid side">
+<div class="card table-scroll" style="padding:0"><table><thead><tr><th>Group</th><th>Sites</th><th></th></tr></thead><tbody>
+{% for g in groups %}<tr><td><strong>{{ g.name }}</strong>{% if g.description %}<div class="muted small">{{ g.description }}</div>{% endif %}</td><td class="small">{% for l in g.locations %}<span class="pill small"><span class="dot {{ l.brand }}"></span>{{ l.name }}</span> {% endfor %}</td>
+<td style="white-space:nowrap"><a class="small" href="/admin/groups?edit={{ g.id }}">Edit</a> · <form method="post" action="/admin/groups/{{ g.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this group?')"><button class="ghost small">Delete</button></form></td></tr>
+{% else %}<tr><td colspan="3" class="muted" style="padding:24px;text-align:center">No groups yet. Groups power the inbox filter and saved views (e.g. one manager's stores).</td></tr>{% endfor %}</tbody></table></div>
+<div class="card"><h3>{% if editing %}Edit group{% else %}New group{% endif %}</h3>
+<form method="post" action="/admin/groups"><input type="hidden" name="id" value="{{ editing.id if editing else 0 }}">
+<p><input type="text" name="name" placeholder="Group name, e.g. Julia's sites" required style="width:100%" value="{{ editing.name if editing else '' }}"></p>
+<p><input type="text" name="description" placeholder="Description (optional)" style="width:100%" value="{{ editing.description if editing and editing.description else '' }}"></p>
+{% set cur = editing.locations|map(attribute='id')|list if editing else [] %}
+<div style="columns:2;font-size:13px">{% for l in locs %}<label class="inline small" style="display:block;margin:2px 0"><input type="checkbox" name="location_ids" value="{{ l.id }}" {% if l.id in cur %}checked{% endif %}> {{ l.name }}</label>{% endfor %}</div>
+<p><button class="primary">Save group</button> {% if editing %}<a class="small" href="/admin/groups">Cancel</a>{% endif %}</p></form></div>
+</div>
+{% endblock %}

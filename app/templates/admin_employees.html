@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('employees') }}
+<div class="grid side">
+<div>
+  <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Roster <span class="muted">· {{ employees|length }}</span></h3>
+  <table><thead><tr><th>Name</th><th>Also matches</th><th>Site</th><th>Role</th><th></th></tr></thead><tbody>
+  {% for e in employees %}<tr style="{% if not e.active %}opacity:.55{% endif %}"><td><strong>{{ e.name }}</strong></td><td class="small muted">{{ e.aliases or '' }}</td><td>{% if e.location %}<span class="dot {{ e.location.brand }}"></span>{{ e.location.name }}{% else %}<span class="muted">any</span>{% endif %}</td><td class="small">{{ e.role or '' }}</td>
+  <td style="white-space:nowrap"><a class="small" href="/admin/employees?edit={{ e.id }}">Edit</a> · <form method="post" action="/admin/employees/{{ e.id }}/delete" style="display:inline" onsubmit="return confirm('Remove from roster? Mentions stay but become unlinked.')"><button class="ghost small">Remove</button></form></td></tr>
+  {% else %}<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">No roster yet. Add people below, or promote names from the detected list.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Detected names not on the roster <span class="muted">· last 180 days</span></h3>
+  <table><thead><tr><th>Name</th><th class="num">Mentions</th><th>Mostly at</th><th>Last</th><th></th></tr></thead><tbody>
+  {% for c in candidates %}<tr><td>{{ c.name }}</td><td class="num">{{ c.count }}</td><td class="small">{{ c.site }}</td><td class="ink2 small">{{ c.last|age }} ago</td>
+  <td><form method="post" action="/admin/employees" style="display:inline"><input type="hidden" name="name" value="{{ c.name }}"><input type="hidden" name="location_id" value="{{ c.location_id or 0 }}"><button class="ghost small">Add to roster</button></form></td></tr>
+  {% else %}<tr><td colspan="5" class="muted" style="padding:20px;text-align:center">Everything detected is already on the roster.</td></tr>{% endfor %}</tbody></table></div>
+</div>
+<div>
+  <div class="card"><h3>{% if editing %}Edit employee{% else %}Add employee{% endif %}</h3>
+  <form method="post" action="/admin/employees"><input type="hidden" name="id" value="{{ editing.id if editing else 0 }}">
+  <p><input type="text" name="name" placeholder="Full or first name as customers write it" required style="width:100%" value="{{ editing.name if editing else '' }}"></p>
+  <p><input type="text" name="aliases" placeholder="Nicknames / variants, semicolon-separated (Mike; Mikey)" style="width:100%" value="{{ editing.aliases if editing and editing.aliases else '' }}"></p>
+  <p><select name="location_id" style="width:100%"><option value="0">Any site</option>{% for l in locs %}<option value="{{ l.id }}" {% if editing and editing.location_id==l.id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}</select></p>
+  <p><input type="text" name="role" placeholder="Role (optional)" style="width:100%" value="{{ editing.role if editing and editing.role else '' }}"></p>
+  <p><label class="inline small"><input type="checkbox" name="active" value="1" {% if not editing or editing.active %}checked{% endif %}> Active (used for matching)</label></p>
+  <p><button class="primary">Save</button> {% if editing %}<a class="small" href="/admin/employees">Cancel</a>{% endif %}</p></form></div>
+  <div class="card"><h3>Re-scan all reviews</h3><p class="small muted">Run after adding roster names so older reviews pick up the matches.</p>
+  <form method="post" action="/admin/employees/reindex"><button class="ghost">Re-scan now</button></form></div>
+</div>
+</div>
+{% endblock %}

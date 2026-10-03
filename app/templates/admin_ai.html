@@ -1,0 +1,23 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('ai') }}
+<div class="grid side">
+<div>
+  <div class="card"><h3>Status</h3>
+    <dl class="kv"><dt>Drafting</dt><dd>{% if ai_enabled %}<span class="pill good">enabled</span>{% else %}<span class="pill warn">off</span> <span class="muted small">set ANTHROPIC_API_KEY in .env</span>{% endif %}</dd>
+    <dt>Model</dt><dd>{{ model }}</dd><dt>AI drafts posted</dt><dd>{{ ai_posted }}</dd>
+    <dt>Phones</dt><dd class="small">{% for b, p in phones.items() %}{{ b }} {{ p }}{% if not loop.last %} · {% endif %}{% endfor %}</dd></dl>
+    <p class="muted small" style="margin:8px 0 0">Every draft is placed in the reply box for a person to read and edit. Nothing posts automatically.</p></div>
+  <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">House rules the AI follows</h3>
+  <table><thead><tr><th>#</th><th>Rule</th><th></th></tr></thead><tbody>
+  {% for r in rules %}<tr style="{% if not r.active %}opacity:.55{% endif %}"><td class="muted">{{ loop.index }}</td><td>{{ r.text }}{% if not r.active %} <span class="pill small">off</span>{% endif %}</td>
+  <td style="white-space:nowrap"><form method="post" action="/admin/ai" style="display:inline"><input type="hidden" name="id" value="{{ r.id }}"><input type="hidden" name="text" value="{{ r.text }}"><input type="hidden" name="sort_order" value="{{ r.sort_order }}"><input type="hidden" name="active" value="{{ 0 if r.active else 1 }}"><button class="ghost small">{% if r.active %}Disable{% else %}Enable{% endif %}</button></form>
+  <form method="post" action="/admin/ai/{{ r.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this rule?')"><button class="ghost small">Delete</button></form></td></tr>
+  {% else %}<tr><td colspan="3" class="muted" style="padding:20px;text-align:center">No rules saved; built-in defaults apply.</td></tr>{% endfor %}</tbody></table></div>
+</div>
+<div class="card"><h3>Add a rule</h3>
+<form method="post" action="/admin/ai"><input type="hidden" name="id" value="0">
+<p><textarea name="text" required style="min-height:80px" placeholder="One instruction, e.g. Never offer refunds or free washes in a reply."></textarea></p>
+<p><label class="inline small">Order <input type="number" name="sort_order" value="100" style="width:70px"></label></p>
+<p><button class="primary">Add rule</button></p></form></div>
+</div>
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script %}
+{% block head %}{{ chart_head() }}{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Reports{% if brand %} · {{ brand }}{% endif %}</h1>
+  <form class="right" method="get" action="/reports">
+    <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
+    <select name="weeks" onchange="this.form.submit()">{% for w in [8,12,26,52] %}<option value="{{ w }}" {% if w==weeks %}selected{% endif %}>Last {{ w }} weeks</option>{% endfor %}</select>
+    <a href="/reports/morning{% if brand %}?brand={{ brand }}{% endif %}" target="_blank" class="small">Preview morning email &rarr;</a>
+  </form></div>
+
+<div class="tiles">
+  <div class="tile"><div class="v">{{ d.new_24h }}</div><div class="l">New (24h)</div><div class="sub">avg {{ d.avg_24h or '–' }}</div></div>
+  <div class="tile"><div class="v">{{ d.totals_30d or '–' }}</div><div class="l">Avg rating (30d)</div><div class="sub">{{ d.count_30d }} reviews · 7d {{ d.totals_7d or '–' }}</div></div>
+  <div class="tile {% if d.negative_30d and d.count_30d and d.negative_30d/d.count_30d > 0.2 %}warn{% endif %}"><div class="v">{{ d.negative_30d }}</div><div class="l">Negative (30d)</div><div class="sub">{% if d.count_30d %}{{ (100*d.negative_30d/d.count_30d)|round|int }}% of reviews{% endif %}</div></div>
+  <div class="tile"><div class="v">{% if d.response_rate_30d is not none %}{{ d.response_rate_30d|int }}%{% else %}–{% endif %}</div><div class="l">Response rate (30d)</div></div>
+  <div class="tile"><div class="v">{{ d.median_response_h_30d|hours }}</div><div class="l">Median response time</div><div class="sub">p90 {{ d.p90_response_h_30d|hours }}</div></div>
+  <div class="tile {% if d.overdue_total %}bad{% endif %}"><div class="v">{{ d.unanswered_total }}</div><div class="l">Unanswered</div><div class="sub">{{ d.overdue_total }} overdue &gt;{{ settings.overdue_hours }}h</div></div>
+  <div class="tile"><div class="v">{{ d.nps_30d if d.nps_30d is not none else '–' }}</div><div class="l">Review NPS (30d)</div><div class="sub">{{ d.promoter_pct_30d or 0 }}% 5★ · {{ d.passive_pct_30d or 0 }}% 4★ · {{ d.detractor_pct_30d or 0 }}% ≤3★</div></div>
+  <div class="tile"><div class="v">{% if d.rating_only_pct_30d is not none %}{{ d.rating_only_pct_30d|int }}%{% else %}–{% endif %}</div><div class="l">Rating only (30d)</div><div class="sub">no written text</div></div>
+</div>
+
+<div class="grid two">
+  <div class="card"><h3>Average rating by week</h3><div class="chart-wrap"><canvas id="cRating"></canvas></div>
+    <details class="data"><summary>Data table</summary><table style="font-size:12px;margin-top:6px"><thead><tr><th>Brand</th>{% for l in trends.labels %}<th class="num">{{ l }}</th>{% endfor %}</tr></thead><tbody>{% for b in trends.brands %}<tr><td>{{ b }}</td>{% for v in trends.avg_rating[b] %}<td class="num">{{ v if v is not none else '–' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></details></div>
+  <div class="card"><h3>Reviews per week</h3><div class="chart-wrap"><canvas id="cVolume"></canvas></div>
+    <details class="data"><summary>Data table</summary><table style="font-size:12px;margin-top:6px"><thead><tr><th>Brand</th>{% for l in trends.labels %}<th class="num">{{ l }}</th>{% endfor %}</tr></thead><tbody>{% for b in trends.brands %}<tr><td>{{ b }}</td>{% for v in trends.counts[b] %}<td class="num">{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></details></div>
+  <div class="card"><h3>Response rate by week (%)</h3><div class="chart-wrap"><canvas id="cResp"></canvas></div>
+    <details class="data"><summary>Data table</summary><table style="font-size:12px;margin-top:6px"><tbody><tr><td>%</td>{% for v in trends.response_rate %}<td class="num">{{ v|int if v is not none else '–' }}</td>{% endfor %}</tr></tbody></table></details></div>
+  <div class="card"><h3>Median response time by week (hours)</h3><div class="chart-wrap"><canvas id="cTime"></canvas></div>
+    <details class="data"><summary>Data table</summary><table style="font-size:12px;margin-top:6px"><tbody><tr><td>h</td>{% for v in trends.median_response_h %}<td class="num">{{ v if v is not none else '–' }}</td>{% endfor %}</tr></tbody></table></details></div>
+</div>
+
+<div class="grid two">
+  <div class="card table-scroll"><h3>Summary by month</h3>
+    <table><thead><tr><th>Month</th><th class="num">Rating</th><th class="num">Reviews</th><th class="num">Positive</th><th class="num">Neutral</th><th class="num">Negative</th><th class="num">Resp. rate</th><th class="num">Median resp.</th></tr></thead><tbody>
+    {% for m in monthly %}<tr><td>{{ m.label }}</td><td class="num">{{ m.avg or '–' }}</td><td class="num">{{ m.n }}</td><td class="num">{{ m.positive }}</td><td class="num">{{ m.neutral }}</td><td class="num" {% if m.n and m.negative/m.n > 0.08 %}style="color:var(--critical)"{% endif %}>{{ m.negative }}</td><td class="num">{% if m.response_rate is not none %}{{ m.response_rate|int }}%{% else %}–{% endif %}</td><td class="num">{{ m.median_response_h|hours }}</td></tr>{% endfor %}</tbody></table>
+    <p class="muted small" style="margin:8px 0 0">Positive = 4–5★, neutral = 3★, negative = 1–2★ (Synup convention). The tiles above use ≤3★ as negative.</p></div>
+  <div>
+    <div class="card table-scroll"><h3>Replies by team member (30d)</h3>
+      <table><thead><tr><th>Who</th><th class="num">Replies</th><th class="num">Median time</th><th class="num">p90</th><th class="num">Negatives</th><th class="num">Template</th><th class="num">AI</th></tr></thead><tbody>
+      {% for p in responders %}<tr><td>{{ p.name }}</td><td class="num">{{ p.count }}</td><td class="num">{{ p.median_h|hours }}</td><td class="num">{{ p.p90_h|hours }}</td><td class="num">{{ p.negatives }}</td><td class="num">{{ p.template_pct }}%</td><td class="num">{{ p.ai_pct }}%</td></tr>
+      {% else %}<tr><td colspan="7" class="muted">No replies posted through this app yet.</td></tr>{% endfor %}</tbody></table></div>
+    <div class="card table-scroll"><h3>Location rank (12 months)</h3>
+      <div class="bars">{% for s in rank %}<span class="small"><span class="dot {{ s.brand }}"></span>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</span><span class="bar"><i style="width:{{ (100*((s.avg or 0)-3)/2)|int if (s.avg or 0) > 3 else 2 }}%"></i></span><span class="num small">{{ s.avg or '–' }} <span class="muted">({{ s.n }})</span></span>{% endfor %}</div></div>
+  </div>
+</div>
+
+<div class="grid side">
+  <div class="card table-scroll"><h3>By site (30 days)</h3>
+  <table><thead><tr><th>Site</th><th class="num">New 24h</th><th class="num">7d avg</th><th class="num">30d avg</th><th class="num">30d #</th><th class="num">Neg</th><th class="num">Resp. rate</th><th class="num">Median resp.</th><th class="num">Open</th><th class="num">Listing</th></tr></thead><tbody>
+  {% set ns = namespace(brand=None) %}
+  {% for s in d.sites %}
+  {% if s.brand != ns.brand %}{% set ns.brand = s.brand %}<tr class="brand-row"><td colspan="10"><span class="dot {{ s.brand }}"></span>{{ s.brand }}</td></tr>{% endif %}
+  <tr class="clickable" onclick="location.href='/sites/{{ s.location_id }}'">
+    <td>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>
+    <td class="num" {% if s.new_24h %}style="font-weight:600"{% endif %}>{{ s.new_24h }}</td>
+    <td class="num" {% if s.avg_7d and s.avg_7d < 4 %}style="color:var(--critical)"{% endif %}>{{ s.avg_7d or '–' }}</td>
+    <td class="num">{{ s.avg_30d or '–' }}</td><td class="num">{{ s.count_30d }}</td><td class="num">{{ s.negative_30d }}</td>
+    <td class="num">{% if s.response_rate_30d is not none %}{{ s.response_rate_30d|int }}%{% else %}–{% endif %}</td>
+    <td class="num">{{ s.median_response_h_30d|hours }}</td>
+    <td class="num">{{ s.unanswered }}{% if s.overdue %} <span class="pill bad">{{ s.overdue }}</span>{% endif %}</td>
+    <td class="num muted">{{ s.listing_avg or '–' }}{% if s.listing_total %} <span class="small">({{ s.listing_total }})</span>{% endif %}</td>
+  </tr>{% endfor %}</tbody></table></div>
+  <div>
+    <div class="card"><h3>Rating mix (30d)</h3><div class="chart-wrap" style="height:170px"><canvas id="cDist"></canvas></div></div>
+    <div class="card"><h3>Negative themes (30d)</h3>
+      {% if d.negative_themes_30d %}<div class="bars">{% set mx = d.negative_themes_30d[0][1] %}{% for cat, n in d.negative_themes_30d %}<span>{{ cat }}</span><span class="bar"><i style="width:{{ (100*n/mx)|int }}%"></i></span><span class="num">{{ n }}</span>{% endfor %}</div>
+      {% else %}<p class="muted small">No tagged negative reviews yet. Tag a theme on each review's page.</p>{% endif %}</div>
+    {% if d.negative_24h %}<div class="card"><h3>Negative in the last 24h</h3>
+    {% for r in d.negative_24h %}<p class="small" style="margin:8px 0">{{ stars(r) }} {{ site(r) }}<br><a href="/reviews/{{ r.id }}">{{ (r.text or '(no text)')[:160] }}</a></p>{% endfor %}</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}{{ chart_script() }}
+<script>
+(function(){
+  var T = {{ trends_json|safe }};
+  var series = T.brands.map(function(b){ return { label:b, data:T.avg_rating[b], color: RM.color(T.colors[b]) }; });
+  RM.line(document.getElementById('cRating'), T.labels, series, { y:{ min:1, max:5, ticks:{ stepSize:1 } } });
+  RM.bars(document.getElementById('cVolume'), T.labels, T.brands.map(function(b){ return { label:b, data:T.counts[b], color: RM.color(T.colors[b]) }; }));
+  var neutral = RM.dark ? '#c3c2b7' : '#52514e';
+  RM.line(document.getElementById('cResp'), T.labels, [{ label:'Response rate', data:T.response_rate, color: RM.color({light:'#2a78d6',dark:'#3987e5'}) }], { y:{ min:0, max:100 } });
+  RM.line(document.getElementById('cTime'), T.labels, [{ label:'Median hours', data:T.median_response_h, color: RM.color({light:'#2a78d6',dark:'#3987e5'}) }], { y:{ min:0 } });
+  RM.hbars(document.getElementById('cDist'), ['5 star','4 star','3 star','2 star','1 star'], T.rating_dist_30d.slice().reverse(), RM.color({light:'#2a78d6',dark:'#3987e5'}));
+})();
+</script>
+{% endblock %}

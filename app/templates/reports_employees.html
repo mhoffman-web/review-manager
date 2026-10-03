@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% from "_stars.html" import stars %}
+{% block content %}
+<div class="page-head"><h1>Team recognition</h1><span class="muted small">Employees customers name in their reviews</span>
+  <form class="right" method="get" action="/reports/employees">
+    <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
+    <select name="location_id" onchange="this.form.submit()"><option value="0">All sites</option>{% for l in locations %}<option value="{{ l.id }}" {% if l.id==location_id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}</select>
+    <select name="days" onchange="this.form.submit()">{% for dd in [30,90,180,365] %}<option value="{{ dd }}" {% if dd==days %}selected{% endif %}>Last {{ dd }} days</option>{% endfor %}</select>
+  </form></div>
+<div class="tiles">
+  <div class="tile"><div class="v">{{ rep.total_mentions }}</div><div class="l">Mentions</div></div>
+  <div class="tile"><div class="v">{{ rep.reviews_with_mentions }}</div><div class="l">Reviews naming someone</div><div class="sub">{{ rep.pct_of_text_reviews }}% of written reviews</div></div>
+  <div class="tile"><div class="v">{{ rep.rows|length }}</div><div class="l">People named</div><div class="sub">{{ rep.rows|selectattr('on_roster')|list|length }} on the roster</div></div>
+</div>
+<div class="grid side">
+  <div class="card table-scroll" style="padding:0">
+    <table><thead><tr><th>#</th><th>Name</th><th>Site(s)</th><th class="num">Mentions</th><th class="num">Avg ★</th><th class="num">Neg</th><th>Last</th><th>Example</th></tr></thead><tbody>
+    {% for e in rep.rows %}<tr><td class="muted">{{ loop.index }}</td><td><strong>{{ e.name }}</strong>{% if not e.on_roster %}<div class="muted small">not on roster{% if user.is_admin %} · <a href="/admin/employees">add</a>{% endif %}</div>{% endif %}</td><td class="small">{{ e.sites }}</td>
+    <td class="num"><strong>{{ e.count }}</strong></td><td class="num">{{ e.avg or '–' }}</td><td class="num" {% if e.negatives %}style="color:var(--critical)"{% endif %}>{{ e.negatives }}</td><td class="ink2 small">{{ e.last|age }} ago</td>
+    <td class="small">{% if e.examples %}<a href="/reviews/{{ e.examples[0].id }}">{{ (e.examples[0].text or '')[:110] }}{% if e.examples[0].text and e.examples[0].text|length > 110 %}…{% endif %}</a>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="8" class="muted" style="padding:24px;text-align:center">No employee mentions detected in this window.</td></tr>{% endfor %}</tbody></table></div>
+  <div>
+    <div class="card"><h3>Mention rate by site</h3>
+      <div class="bars">{% set mx = rep.sites[0].pct if rep.sites else 1 %}{% for s in rep.sites %}<span class="small">{{ s.name }}</span><span class="bar"><i style="width:{{ (100*s.pct/(mx or 1))|int }}%"></i></span><span class="num small">{{ s.pct }}%</span>{% endfor %}</div>
+      <p class="muted small" style="margin:8px 0 0">Share of reviews that name a team member. A high rate usually means a crew that greets and prepping staff who introduce themselves.</p></div>
+    <div class="card"><h3>How this works</h3><p class="small muted" style="margin:0">Names are detected from review text (cues like "shout out to Karla" or "Jared was great") and matched to the employee roster. Anyone can add or remove a tag on a review. Admins maintain the roster under Admin → Employees so variants and nicknames roll up to one person.</p></div>
+  </div>
+</div>
+{% endblock %}

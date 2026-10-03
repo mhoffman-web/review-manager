@@ -1,0 +1,46 @@
+{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}
+{% block content %}
+<div class="tabs">
+{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?view={{ key }}&brand={{ brand }}&location_id={{ location_id }}&group_id={{ group_id }}&rating={{ rating }}&q={{ q }}&days={{ days }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
+{% if not counts.get('archived') %}<a href="/?view=archived" class="{% if view=='archived' %}active{% endif %} muted">Archived</a>{% endif %}
+</div>
+{% if saved_views or user %}
+<div class="tabs saved">
+  <span class="muted small" style="align-self:center;margin-right:4px">Saved views</span>
+  {% for v in saved_views %}<a href="/?sv={{ v.id }}" class="{% if active_view and active_view.id==v.id %}active{% endif %}" title="{% if v.is_shared %}Shared{% else %}Only you{% endif %}{% if v.owner %} · {{ v.owner.name }}{% endif %}">{{ v.name }}{% if not v.is_shared %} <span class="muted">·</span>{% endif %}</a>{% endfor %}
+  <details class="inline-form"><summary class="chip">+ Save current filters</summary>
+    <form method="post" action="/views" class="filters" style="margin-top:6px"><input type="hidden" name="params" value='{{ current_params_json }}'>
+      <input type="text" name="name" placeholder="View name, e.g. LW Negatives" required><label class="inline small"><input type="checkbox" name="is_shared" value="1" checked> share with team</label><button class="ghost">Save</button></form></details>
+  {% if active_view and (active_view.owner_id==user.id or user.is_admin) %}<form method="post" action="/views/{{ active_view.id }}/delete" style="align-self:center" onsubmit="return confirm('Delete this saved view?')"><button class="ghost small">Delete view</button></form>{% endif %}
+</div>
+{% endif %}
+<form class="filters" method="get" action="/"><input type="hidden" name="view" value="{{ view }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search review text or name">
+  <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
+  {% if groups %}<select name="group_id" onchange="this.form.submit()"><option value="0">All groups</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id==group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>{% endif %}
+  <select name="location_id" onchange="this.form.submit()"><option value="0">All sites</option>{% for l in locations %}<option value="{{ l.id }}" {% if l.id==location_id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}</select>
+  <select name="rating" onchange="this.form.submit()"><option value="">Any rating</option>{% for s in [1,2,3,4,5] %}<option value="{{ s }}" {% if rating==s|string %}selected{% endif %}>{{ s }} star</option>{% endfor %}</select>
+  <select name="days" onchange="this.form.submit()"><option value="0">Any time</option>{% for dd, lbl in [(1,'Yesterday & today'),(7,'Last 7 days'),(30,'Last 30 days'),(90,'Last 90 days')] %}<option value="{{ dd }}" {% if dd==days %}selected{% endif %}>{{ lbl }}</option>{% endfor %}</select>
+  <button class="ghost">Apply</button>
+  {% if q or brand or location_id or rating or group_id or days %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
+  <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
+</form>
+<div class="card table-scroll" style="padding:0">
+<table class="inbox"><thead><tr><th>Rating</th><th>Site</th><th>Review</th><th>Author</th><th>Posted</th><th>Status</th><th></th></tr></thead><tbody>
+{% for r in reviews %}
+<tr class="clickable" onclick="if(!event.target.closest('a,button,form'))location.href='/reviews/{{ r.id }}'">
+  <td style="white-space:nowrap">{{ source_icon(r) }} {{ stars(r) }}</td>
+  <td>{{ site(r) }}</td>
+  <td><a href="/reviews/{{ r.id }}" style="color:inherit"><div class="snippet">{% if r.is_rating_only %}<span class="muted">Rating only, no written review</span>{% else %}{{ r.text }}{% endif %}</div></a>{{ badges(r) }}</td>
+  <td class="ink2">{{ r.author_name or 'Anonymous' }}</td>
+  <td class="ink2" title="{{ r.created_at_source|local }}">{{ r.created_at_source|age }}</td>
+  <td>{{ status(r, overdue_cut) }}{% if r.has_owner_reply and r.response_hours is not none %}<div class="muted small">in {{ r.response_hours|hours }}</div>{% endif %}</td>
+  <td style="white-space:nowrap">{% if not r.has_owner_reply and not r.is_archived %}{% if r.assigned_to %}<span class="pill {% if r.assigned_to_id==user.id %}me{% endif %}">{{ r.assigned_to.name.split()[0] }}</span>{% else %}<form method="post" action="/reviews/{{ r.id }}/claim" style="display:inline"><input type="hidden" name="back" value="{{ request.url.path }}?{{ request.url.query }}"><button class="ghost small">Claim</button></form>{% endif %}{% endif %}</td>
+</tr>
+{% else %}<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='mine' %}You have no claimed reviews.{% elif view=='failed' %}No failed posts.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
+</tbody></table>
+</div>
+<div class="pager">{% if page>1 %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&page={{ page-1 }}">&larr; Previous</a>{% endif %}
+<span class="muted small">Page {{ page }} of {{ ((total-1)//per_page)+1 if total else 1 }}</span>
+{% if page*per_page < total %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&page={{ page+1 }}">Next &rarr;</a>{% endif %}</div>
+{% endblock %}

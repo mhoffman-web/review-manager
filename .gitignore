@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+client_secret.json
+google_token.json
+*.db
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,9 @@
+{% macro admin_tabs(active) %}
+<div class="tabs">
+  <a class="{% if active=='users' %}active{% endif %}" href="/admin/users">Users</a>
+  <a class="{% if active=='recipients' %}active{% endif %}" href="/admin/recipients">Report recipients</a>
+  <a class="{% if active=='groups' %}active{% endif %}" href="/admin/groups">Site groups</a>
+  <a class="{% if active=='employees' %}active{% endif %}" href="/admin/employees">Employees</a>
+  <a class="{% if active=='ai' %}active{% endif %}" href="/admin/ai">AI rules</a>
+</div>
+{% endmacro %}

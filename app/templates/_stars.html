@@ -1,0 +1,21 @@
+{% macro stars(r) -%}
+{% if r.rating %}<span class="stars{% if r.is_negative %} bad{% endif %}" title="{{ r.rating }} of 5">{% for i in range(r.rating) %}&#9733;{% endfor %}<span class="off">{% for i in range(5 - r.rating) %}&#9733;{% endfor %}</span></span>{% else %}<span class="muted">unrated</span>{% endif %}
+{%- endmacro %}
+{% macro status(r, overdue_cut) -%}
+{% if r.is_archived %}<span class="pill">Archived</span>
+{% elif r.has_owner_reply %}<span class="pill good">Replied</span>
+{% elif r.created_at_source < overdue_cut %}<span class="pill bad">Overdue</span>
+{% elif r.is_negative %}<span class="pill serious">Needs reply</span>
+{% else %}<span class="pill warn">Open</span>{% endif %}
+{%- endmacro %}
+{% macro site(r) -%}
+{% if r.location %}<span class="dot {{ r.location.brand }}"></span><a class="site-link" href="/sites/{{ r.location.id }}">{{ r.location.name }}</a>{% else %}{{ r.source_link.display_name }}{% endif %}
+{%- endmacro %}
+{% macro source_icon(r) -%}
+{% if r.source == 'google' %}<span class="src g" title="Google">G</span>{% elif r.source == 'facebook' %}<span class="src f" title="Facebook">f</span>{% else %}<span class="src" title="{{ r.source }}">{{ r.source[:1]|upper }}</span>{% endif %}
+{%- endmacro %}
+{% macro badges(r) -%}
+{% if r.was_edited %}<span class="pill small" title="Edited by the reviewer after posting">Updated</span>{% endif %}
+{% for n in r.mention_names %}<span class="pill small emp" title="Employee mentioned">@{{ n }}</span>{% endfor %}
+{% if r.category %}<span class="pill small">{{ r.category }}</span>{% endif %}
+{%- endmacro %}

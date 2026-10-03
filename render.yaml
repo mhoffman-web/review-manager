@@ -1,0 +1,32 @@
+# Render Blueprint: one web service running the demo with self-seeded
+# placeholder data. Free plan: spins down after ~15 min idle (first request
+# then takes ~30-60 s) and the SQLite file is ephemeral, so the demo data is
+# regenerated on each deploy or restart. For production switch to a Render
+# Postgres database and set DATABASE_URL (see README section 4).
+services:
+  - type: web
+    name: review-manager-demo
+    runtime: python
+    plan: free
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DEMO_MODE
+        value: "true"
+      - key: DATABASE_URL
+        value: sqlite:////tmp/review_manager_demo.db
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEMO_PASSWORD
+        generateValue: true
+      - key: TIMEZONE
+        value: America/Chicago
+      - key: PASSWORD_LOGIN_ENABLED
+        value: "true"
+      - key: LISTING_EXCLUDE_PATTERNS
+        value: "wash n' roll,wash n roll"

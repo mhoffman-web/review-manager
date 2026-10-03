@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Review Manager{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}</head>
+<body>
+{% if user %}
+{% set path = request.url.path %}
+<nav class="top">
+  <a class="brand" href="/">Review<span>Manager</span></a>
+  <a class="item {% if path=='/' or path.startswith('/reviews') %}active{% endif %}" href="/">Inbox {% if nav.attention %}<span class="count">{{ nav.attention }}</span>{% endif %}</a>
+  <a class="item {% if path=='/reports' or path.startswith('/sites') %}active{% endif %}" href="/reports">Reports</a>
+  <a class="item {% if path.startswith('/reports/employees') %}active{% endif %}" href="/reports/employees">Team</a>
+  <a class="item {% if path.startswith('/admin/templates') %}active{% endif %}" href="/admin/templates">Templates</a>
+  <a class="item {% if path.startswith('/locations') %}active{% endif %}" href="/locations">Listings</a>
+  {% if user.is_admin %}<a class="item {% if path.startswith('/admin') and not path.startswith('/admin/templates') %}active{% endif %}" href="/admin/users">Admin</a>{% endif %}
+  <span class="spacer"></span>
+  <span class="meta">{% if nav.last_sync %}Synced {{ nav.last_sync|age }} ago{% else %}Not synced yet{% endif %} · {{ user.name }}</span>
+  <form method="post" action="/logout"><button>Sign out</button></form>
+</nav>
+{% endif %}
+<main>{% block content %}{% endblock %}</main>
+{% block scripts %}{% endblock %}
+</body></html>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('recipients') }}
+<div class="grid side">
+<div class="card" style="padding:0"><table><thead><tr><th>Email</th><th>Name</th><th>Brands</th><th></th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.email }}</td><td>{{ r.name or '' }}</td><td>{% for b in r.brand_list() %}<span class="pill"><span class="dot {{ b }}"></span>{{ b }}</span> {% else %}<span class="muted">All sites</span>{% endfor %}</td>
+<td><form method="post" action="/admin/recipients/{{ r.id }}/delete" onsubmit="return confirm('Remove this recipient?')"><button class="ghost small">Remove</button></form></td></tr>
+{% else %}<tr><td colspan="4" class="muted" style="padding:24px;text-align:center">No recipients. The morning email goes nowhere until someone is added.</td></tr>{% endfor %}</tbody></table></div>
+<div class="card"><h3>Add recipient</h3>
+<form method="post" action="/admin/recipients">
+<p><input type="email" name="email" placeholder="Email" required style="width:100%"></p>
+<p><input type="text" name="name" placeholder="Name (optional)" style="width:100%"></p>
+<p class="small muted">Limit to brands (leave all unchecked for every site):</p>
+<p>{% for b in brands %}<label class="inline" style="margin-right:12px"><input type="checkbox" name="brands" value="{{ b }}"> {{ b }}</label>{% endfor %}</p>
+<p><button class="primary">Add</button></p></form>
+<p class="muted small">Sent daily at {{ settings.report_hour_local }}:00 {{ settings.timezone.split('/')[-1].replace('_',' ') }}. Recipients with the same brand filter share one email. <a href="/reports/morning" target="_blank">Preview</a>.</p></div>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head"><h1>Reply templates <span class="muted small">{{ total }}</span></h1><span class="muted small">Placeholders: <code>{first_name}</code> <code>{site}</code> <code>{brand}</code> <code>{employee}</code> <code>{agent}</code></span></div>
+<div class="grid side">
+<div>
+{% for band, tpls in groups %}
+<div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">{{ band }} <span class="muted">· {{ tpls|length }}</span></h3>
+<table><thead><tr><th>Name</th><th>Fits</th><th>Body</th><th class="num">Used</th><th>Updated</th><th></th></tr></thead><tbody>
+{% for t in tpls %}<tr style="{% if not t.active %}opacity:.55{% endif %}"><td><strong>{{ t.name }}</strong>{% if t.brand %}<div class="muted small">{{ t.brand }} only</div>{% endif %}{% if not t.active %}<div class="muted small">inactive</div>{% endif %}</td>
+<td class="small">{% for tag in t.tag_list() %}<span class="pill small">{{ tag }}</span> {% endfor %}</td>
+<td class="small" style="white-space:pre-wrap;max-width:380px">{{ t.body }}</td>
+<td class="num">{{ t.usage_count or 0 }}</td>
+<td class="muted small">{{ t.updated_by.name.split()[0] if t.updated_by else '' }} {{ t.updated_at|local('%b %-d') }}</td>
+<td style="white-space:nowrap">{% if user.is_admin %}<a class="small" href="/admin/templates?edit={{ t.id }}">Edit</a> · <form method="post" action="/admin/templates/{{ t.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this template?')"><button class="ghost small">Delete</button></form>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}<div class="card muted">No templates yet.</div>{% endfor %}
+</div>
+{% if user.is_admin %}
+<div class="card" style="position:sticky;top:64px"><h3>{% if editing %}Edit template{% else %}New template{% endif %}</h3>
+<form method="post" action="/admin/templates"><input type="hidden" name="id" value="{{ editing.id if editing else 0 }}">
+<p><label class="small muted">Name</label><input type="text" name="name" required style="width:100%" value="{{ editing.name if editing else '' }}" placeholder="5-Star – Employee mention"></p>
+<div class="grid three" style="gap:8px">
+  <p><label class="small muted">Brand</label><select name="brand" style="width:100%"><option value="">All</option>{% for b in brands %}<option value="{{ b }}" {% if editing and editing.brand==b %}selected{% endif %}>{{ b }}</option>{% endfor %}</select></p>
+  <p><label class="small muted">Min ★</label><input type="number" name="min_rating" min="1" max="5" value="{{ editing.min_rating if editing else 5 }}" style="width:100%"></p>
+  <p><label class="small muted">Max ★</label><input type="number" name="max_rating" min="1" max="5" value="{{ editing.max_rating if editing else 5 }}" style="width:100%"></p>
+</div>
+<p><label class="small muted">Fits reviews that mention (used for suggestions)</label><br>{% set cur = editing.tag_list() if editing else [] %}{% for tag in tag_options %}<label class="inline small" style="margin:2px 10px 2px 0"><input type="checkbox" name="tags" value="{{ tag }}" {% if tag in cur %}checked{% endif %}> {{ tag.replace('_',' ') }}</label>{% endfor %}</p>
+<p><label class="small muted">Body</label><textarea name="body" required>{{ editing.body if editing else '' }}</textarea></p>
+<p style="display:flex;gap:14px;align-items:center"><label class="inline small">Order <input type="number" name="sort_order" value="{{ editing.sort_order if editing else 100 }}" style="width:70px"></label>
+<label class="inline small"><input type="checkbox" name="active" value="1" {% if not editing or editing.active %}checked{% endif %}> Active</label></p>
+<p><button class="primary">Save template</button> {% if editing %}<a class="small" href="/admin/templates">Cancel</a>{% endif %}</p></form></div>
+{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,24 @@
+name,brand,state,city,snowflake_location_ids
+WashU Berwyn,WashU,IL,Berwyn,80001;BERWYN0001
+WashU Burbank,WashU,IL,Burbank,30001;BURBT10001
+WashU Carol Stream,WashU,IL,Carol Stream,40001;CAROL0001
+WashU Des Plaines,WashU,IL,Des Plaines,50001;DESPLN0001
+WashU Evergreen Park,WashU,IL,Evergreen Park,110001;EVRGRN0001
+WashU Joliet,WashU,IL,Plainfield,90001;JOLIET0001
+WashU Naperville,WashU,IL,Naperville,100001;NAPER0001
+WashU Plainfield,WashU,IL,Plainfield,10001;PLNFLD0001
+WashU Villa Park,WashU,IL,Villa Park,20001;VILLAP0001
+WashU Niles,WashU,IL,Niles,NILES0001
+WashU Wheaton,WashU,IL,Wheaton,WHEAT0001
+ICON Nolensville,ICON,TN,Nolensville,NOLO0002
+ICON Dickson,ICON,TN,Dickson,DKSN0002
+ICON Fairview,ICON,TN,Fairview,FRVW0002
+Wash Associates Jackson,WA,TN,Jackson,JKSN0002
+ICON Madison,ICON,TN,Madison,
+ICON McMinnville,ICON,TN,McMinnville,
+ICON Decherd,ICON,TN,Decherd,
+ICON Manchester,ICON,TN,Manchester,
+ICON Goodlettsville,ICON,TN,Goodlettsville,
+ICON Thompson Lane,ICON,TN,Nashville,
+ICON Charlotte Pike,ICON,TN,Nashville,
+ICON Antioch,ICON,TN,Antioch,
