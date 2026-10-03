@@ -8,6 +8,7 @@ from typing import Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .events import record
 from .models import Review, ReviewSourceLink, SyncRun
 from .sources import get_adapter
@@ -52,8 +53,14 @@ def _apply(session: Session, review: Review, nr: NormalizedReview, now: datetime
             setattr(review, k, v)
             changed = True
     if review.is_deleted:
-        review.is_deleted, review.removed_at = False, None
+        # Back on the platform. Clear the removal stamps so a later disappearance alerts
+        # again, and reopen a report we auto-closed as "removed" when it vanished.
+        review.is_deleted, review.removed_at, review.removal_notified_at = False, None, None
         record(session, review, "restored", at=now)
+        if review.report_status == "removed":
+            review.report_status = "reported"
+            record(session, review, "report_outcome", at=now, outcome="reported", auto=True,
+                   note="review reappeared on the platform; report reopened")
         changed = True
     review.last_seen_at = now
     return changed
@@ -92,6 +99,68 @@ def _intel(session: Session, review: Review, roster) -> None:
         review.category_source = "keyword"
 
 
+def _mark_removed(session: Session, link: ReviewSourceLink, run: SyncRun, seen_ids: set,
+                  total: Optional[int], now: datetime) -> int:
+    """After a full pull, flag reviews the platform no longer returns.
+
+    Three guards keep one bad pull from emailing about a mass deletion and
+    auto-closing every open report:
+      * a pull that returned nothing is a platform hiccup, not "every review vanished";
+      * a pull that saw fewer reviews than the platform's own total is truncated
+        (a dropped page token, Google hiding reviews mid-pull), so it proves nothing;
+      * a review is removed only once it has been missing from REMOVAL_CONFIRM_PULLS
+        consecutive successful full pulls, i.e. it was last seen before the previous
+        one started. One miss is a hold, not a verdict.
+    Returns how many reviews were marked."""
+    stale = session.execute(
+        select(Review).where(Review.source_link_id == link.id, Review.is_deleted.is_(False))
+    ).scalars().all()
+    missing = [r for r in stale if r.external_id not in seen_ids]
+    if not missing:
+        return 0
+    name = link.display_name or link.external_location_id
+    if run.reviews_seen == 0:
+        run.complete = False
+        log.warning("full pull of %s returned no reviews; not marking %d reviews removed", name, len(missing))
+        return 0
+    if total is not None and run.reviews_seen < total - max(1, total // 50):
+        run.complete = False
+        log.warning("full pull of %s saw %d of the %d reviews the platform reports; treating it as truncated, "
+                    "not marking %d reviews removed", name, run.reviews_seen, total, len(missing))
+        return 0
+    confirm = max(1, settings.removal_confirm_pulls)
+    if confirm > 1:
+        prev_starts = session.execute(
+            select(SyncRun.started_at).where(SyncRun.source_link_id == link.id, SyncRun.full.is_(True),
+                                             SyncRun.status == "ok", SyncRun.complete.is_(True), SyncRun.id != run.id)
+            .order_by(SyncRun.started_at.desc()).limit(confirm - 1)
+        ).scalars().all()
+        if len(prev_starts) < confirm - 1:
+            log.info("full pull of %s: %d reviews unseen, holding until %d consecutive full pulls agree",
+                     name, len(missing), confirm)
+            return 0
+        cutoff = prev_starts[-1]
+        held = [r for r in missing if r.last_seen_at is None or r.last_seen_at >= cutoff]
+        missing = [r for r in missing if r.last_seen_at is not None and r.last_seen_at < cutoff]
+        if held:
+            log.info("full pull of %s: %d reviews missed once, holding for the next full pull", name, len(held))
+    for r in missing:
+        r.is_deleted, r.removed_at = True, now
+        record(session, r, "removed", at=now, rating=r.rating, text=(r.text or "")[:500])
+        if r.report_status == "reported":
+            r.report_status = "removed"
+            record(session, r, "report_outcome", at=now, outcome="removed", auto=True)
+    return len(missing)
+
+
+def _note_failure(link: Optional[ReviewSourceLink], run: SyncRun, err: str) -> None:
+    run.status, run.error, run.finished_at = "error", err, datetime.utcnow()
+    if link is not None:
+        link.last_sync_status = "error"
+        link.fail_count = (link.fail_count or 0) + 1
+        link.last_error = err
+
+
 def sync_link(
     session: Session,
     link: ReviewSourceLink,
@@ -99,9 +168,11 @@ def sync_link(
     adapter: Optional[ReviewSourceAdapter] = None,
 ) -> SyncRun:
     adapter = adapter or get_adapter(link.source)
+    link_id, name = link.id, link.display_name or link.external_location_id
     run = SyncRun(source_link_id=link.id, full=full)
     session.add(run)
     session.flush()
+    started = run.started_at
 
     since = None
     if not full and link.last_synced_at is not None:
@@ -109,12 +180,14 @@ def sync_link(
 
     now = datetime.utcnow()
     seen_ids = set()
+    total: Optional[int] = None
     roster = build_roster(session)
     try:
         for nr, summary in adapter.fetch_reviews(link, since=since):
             if summary is not None:
                 link.avg_rating = summary.avg_rating
                 link.total_review_count = summary.total_review_count
+                total = summary.total_review_count
             if nr.external_id == "__none__":
                 continue
             run.reviews_seen += 1
@@ -142,37 +215,35 @@ def sync_link(
                         _intel(session, review, roster)
 
         if full:
-            # Anything we did not see on a full pull is gone from the platform (the reviewer deleted
-            # it, or the platform removed it). A full pull that returned nothing at all is treated as
-            # a platform hiccup, never as "every review vanished".
-            stale = session.execute(
-                select(Review).where(Review.source_link_id == link.id, Review.is_deleted.is_(False))
-            ).scalars().all()
-            missing = [r for r in stale if r.external_id not in seen_ids]
-            if missing and run.reviews_seen == 0:
-                log.warning("full pull of %s returned no reviews; not marking %d reviews removed", link.display_name, len(missing))
-            else:
-                for r in missing:
-                    r.is_deleted, r.removed_at = True, now
-                    record(session, r, "removed", at=now, rating=r.rating, text=(r.text or "")[:500])
-                    if r.report_status == "reported":
-                        r.report_status = "removed"
-                        record(session, r, "report_outcome", at=now, outcome="removed", auto=True)
+            _mark_removed(session, link, run, seen_ids, total, now)
 
         link.last_synced_at = now
         link.last_sync_status = "ok"
         link.fail_count, link.last_error, link.failure_notified_at = 0, None, None
         run.status = "ok"
-    except Exception as exc:  # keep going for other locations
-        log.exception("sync failed for review_sources.id=%s (%s)", link.id, link.display_name)
-        link.last_sync_status = "error"
-        link.fail_count = (link.fail_count or 0) + 1
-        link.last_error = str(exc)[:2000]
-        run.status = "error"
-        run.error = str(exc)[:2000]
-    finally:
         run.finished_at = datetime.utcnow()
         session.flush()
+    except Exception as exc:  # keep going for other locations
+        # `link` may already be expired by a failed flush, so only use what was read up front.
+        log.exception("sync failed for review_sources.id=%s (%s)", link_id, name)
+        err = str(exc)[:2000]
+        try:
+            # Keep whatever this pull already wrote and record the failure beside it.
+            _note_failure(link, run, err)
+            session.flush()
+        except Exception:
+            # The session itself is broken (a failed flush, e.g. the admin's manual Sync racing the
+            # worker on the same review). Only a rollback makes it usable again, and the rollback
+            # discards everything this pull wrote, `run` included. Start clean so the failure and
+            # the listing's fail_count survive the caller's commit instead of poisoning it.
+            log.warning("session unusable after sync failure of review_sources.id=%s; rolling back", link_id)
+            session.rollback()
+            link = session.get(ReviewSourceLink, link_id)
+            run = SyncRun(source_link_id=link_id, full=full, started_at=started,
+                          reviews_seen=0, reviews_new=0, reviews_updated=0)
+            session.add(run)
+            _note_failure(link, run, err)
+            session.flush()
     return run
 
 
@@ -184,9 +255,19 @@ def sync_all(session: Session, full: bool = False, source: Optional[str] = None)
     totals = {"links": 0, "ok": 0, "error": 0, "seen": 0, "new": 0, "updated": 0}
     adapters: Dict[str, ReviewSourceAdapter] = {}
     for link in links:
-        adapters.setdefault(link.source, get_adapter(link.source))
-        run = sync_link(session, link, full=full, adapter=adapters[link.source])
-        session.commit()
+        lid = link.id
+        try:
+            adapters.setdefault(link.source, get_adapter(link.source))
+            run = sync_link(session, link, full=full, adapter=adapters[link.source])
+            session.commit()
+        except Exception:
+            # sync_link already copes with its own failures; this catches a broken commit or a
+            # missing adapter so one listing can never stop the others or the tick.
+            log.exception("sync of review_sources.id=%s could not be saved; skipping it this tick", lid)
+            session.rollback()
+            totals["links"] += 1
+            totals["error"] += 1
+            continue
         totals["links"] += 1
         totals["ok" if run.status == "ok" else "error"] += 1
         totals["seen"] += run.reviews_seen

@@ -15,6 +15,7 @@ def db(monkeypatch):
     monkeypatch.setattr(auth.settings, "ms_client_secret", "secret")
     monkeypatch.setattr(auth.settings, "sso_allowed_domains", ["washucarwash.com", "washassociates.com", "iconcarwash.com"])
     monkeypatch.setattr(auth.settings, "sso_allowed_tenants", [])
+    monkeypatch.setattr(auth.settings, "ms_tenant", "tenant-a")      # single-tenant registration
     monkeypatch.setattr(auth.settings, "sso_auto_provision", True)
     s = SessionLocal()
     s.add(User(email="mhoffman@washucarwash.com", name="Mitch Hoffman", password_hash=auth.hash_password("dev-password-admin-2026"), role="admin"))
@@ -62,6 +63,43 @@ def test_resolve_rejects_other_domains_tenants_and_inactive(db, monkeypatch):
     assert auth.authenticate(db, lily.email, "anything") is None
     monkeypatch.setattr(auth.settings, "password_login_enabled", False)
     assert auth.authenticate(db, "mhoffman@washucarwash.com", "dev-password-admin-2026") is None
+
+
+def test_sso_needs_a_pinned_tenant(db, monkeypatch):
+    """A multi-tenant authority with no allow-list is the takeover setup: refuse to run SSO at all."""
+    monkeypatch.setattr(auth.settings, "ms_tenant", "organizations")
+    assert auth.settings.sso_accepted_tenants == [] and not auth.settings.sso_enabled
+    assert "SSO_ALLOWED_TENANTS" in auth.settings.sso_config_problem
+    with pytest.raises(auth.SsoError):
+        auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-admin"))
+    monkeypatch.setattr(auth.settings, "sso_allowed_tenants", ["tenant-a", "tenant-wa"])
+    assert auth.settings.sso_enabled and auth.settings.sso_config_problem is None
+    assert auth.resolve_sso_user(db, claims("sarah@washassociates.com", oid="oid-2", tid="tenant-wa")).ms_tenant_id == "tenant-wa"
+    # a token without the identity claims is useless even from an allowed tenant
+    for bad in ({"oid": None}, {"tid": ""}):
+        with pytest.raises(auth.SsoError):
+            auth.resolve_sso_user(db, {**claims("ok@washucarwash.com"), **bad})
+
+
+def test_email_claim_cannot_take_over_a_bound_account(db, monkeypatch):
+    admin = auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-admin"))
+    assert admin.role == "admin" and admin.ms_oid == "oid-admin" and admin.ms_tenant_id == "tenant-a"
+    # another tenant's user carrying our admin's email: tenant check stops it first...
+    with pytest.raises(auth.SsoError):
+        auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-evil", tid="tenant-evil"))
+    # ...and even from an allowed tenant, a different object id never inherits an account by email
+    monkeypatch.setattr(auth.settings, "sso_allowed_tenants", ["tenant-a", "tenant-evil"])
+    with pytest.raises(auth.SsoError):
+        auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-evil", tid="tenant-evil"))
+    with pytest.raises(auth.SsoError):
+        auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-other", tid="tenant-a"))
+    # the bound identity presented from the wrong tenant is refused too
+    with pytest.raises(auth.SsoError):
+        auth.resolve_sso_user(db, claims("mhoffman@washucarwash.com", oid="oid-admin", tid="tenant-evil"))
+    db.expire_all()
+    assert db.execute(select(User).where(User.email == "mhoffman@washucarwash.com")).scalar_one().ms_oid == "oid-admin"
+    # the real identity still signs in, even after an email change in Entra
+    assert auth.resolve_sso_user(db, claims("mitch.hoffman@washucarwash.com", oid="oid-admin")).id == admin.id
 
 
 def test_login_page_and_callback_flow(db, monkeypatch):

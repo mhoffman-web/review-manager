@@ -55,7 +55,8 @@ review_manager/
   "Recovered" on Reports counts ratings raised after our reply.
 * **Instant alerts** – the Alerts recipient list is emailed minutes after the
   sync that finds a new 1–3★ review, a review that disappeared, or a listing
-  failing three syncs in a row. A full re-pull runs once a day to catch removals.
+  failing three syncs in a row. A full re-pull runs once a day to catch removals;
+  a review counts as removed only after two consecutive full pulls miss it.
 * **Report to Google** – opens Google's review tool with the details copied,
   records the report (disputed badge) and its outcome; disputed reviews stay out
   of averages until Google decides.
@@ -209,7 +210,14 @@ Google took them down; the last known version is kept), and listings that failed
 recipient exists, so alerts start flowing the moment someone is added.
 `python cli.py send-alerts --dry-run` shows what is waiting. Removals are only
 detectable on a full pull, so the worker does one per day after
-`FULL_SYNC_HOUR_LOCAL` (default 3 AM).
+`FULL_SYNC_HOUR_LOCAL` (default 3 AM). One pull is never trusted on its own: a
+review is marked removed only after `REMOVAL_CONFIRM_PULLS` (default 2)
+consecutive successful full pulls miss it, so a removal alert arrives the
+second morning after the review vanished. A pull that returns nothing, or
+fewer reviews than Google's own total for the listing, is treated as
+truncated and marks nothing. A review that reappears is restored, its
+removal alert is re-armed, and a report we auto-closed as "removed" is
+reopened.
 
 ## 3c. Second source: Facebook
 
@@ -281,8 +289,13 @@ One-time setup by whoever holds the Entra admin role (about ten minutes):
    *Supported account types*: if all three domains are verified in **one**
    tenant, choose *Accounts in this organizational directory only* and later
    set `MS_TENANT_ID` to the Directory (tenant) ID. If the brands live in
-   separate tenants, choose *Accounts in any organizational directory* and
-   leave `MS_TENANT_ID=organizations`.
+   separate tenants, choose *Accounts in any organizational directory*,
+   leave `MS_TENANT_ID=organizations` and set `SSO_ALLOWED_TENANTS` to the
+   Directory (tenant) IDs of every tenant (comma-separated). This is
+   required: with a multi-tenant authority anyone can create their own Entra
+   tenant and a user whose mail attribute is one of our addresses, so an
+   email claim is only trusted from tenants on this list. Sign-in stays off
+   (and the log says why) until the app is pinned to at least one tenant.
    *Redirect URI* (type **Web**): `https://<your-app-host>/auth/microsoft/callback`.
    Add `http://localhost:8000/auth/microsoft/callback` too for local testing.
 2. **Certificates & secrets → New client secret**. Copy the *Value* (not the
@@ -295,8 +308,12 @@ One-time setup by whoever holds the Entra admin role (about ten minutes):
    needed. Click *Grant admin consent* so users are not prompted. For a
    multi-tenant registration, an admin in each other tenant grants consent
    once, or users consent on first sign-in.
-6. Restart the app. Optional hardening: set `SSO_ALLOWED_TENANTS` to the
-   tenant ids that should be accepted.
+6. Restart the app. Accounts are matched by Microsoft object id first; an
+   email match is used only for an account's first Microsoft sign-in, and an
+   account already bound to another Microsoft identity is never re-bound by
+   email. To re-bind an account to a new Microsoft identity (a tenant move,
+   a recreated user), clear `ms_oid` on that user row; the next sign-in links
+   by email again.
 
 How it works: OpenID Connect authorization-code flow via Microsoft's MSAL
 library. The flow state lives in a short-lived signed cookie, the id token is

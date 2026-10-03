@@ -45,6 +45,8 @@ from contextlib import asynccontextmanager
 async def _lifespan(_app: FastAPI):
     from .db import init_db
     init_db()          # create tables / add new columns before serving
+    if settings.sso_config_problem:
+        log.warning("microsoft sign-in disabled: %s", settings.sso_config_problem)
     yield
 
 

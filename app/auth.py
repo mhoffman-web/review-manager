@@ -126,22 +126,38 @@ def email_domain_allowed(email: str) -> bool:
 
 
 def resolve_sso_user(db: Session, claims: dict) -> User:
-    """Match or provision a user from verified id_token claims. Raises SsoError."""
+    """Match or provision a user from verified id_token claims. Raises SsoError.
+
+    Identity is the (tenant id, object id) pair Microsoft asserts, never the email
+    alone: the mail attribute is set by whoever administers the signing tenant, so
+    an email match is only trusted from a tenant on our list, and never overrides
+    an account that is already bound to a different Microsoft identity."""
     email = (claims.get("email") or claims.get("preferred_username") or "").strip().lower()
-    oid = claims.get("oid")
-    tid = claims.get("tid")
+    oid = (claims.get("oid") or "").strip() or None
+    tid = (claims.get("tid") or "").strip() or None
     name = (claims.get("name") or email.split("@")[0]).strip()
+    accepted = settings.sso_accepted_tenants
+    if not accepted:
+        raise SsoError("Microsoft sign-in is not pinned to a tenant. An admin must set SSO_ALLOWED_TENANTS.")
+    if not oid or not tid:
+        raise SsoError("Microsoft did not return a tenant and object id for this account.")
+    if tid not in accepted:
+        raise SsoError("This Microsoft organization is not allowed to sign in.")
     if not email or "@" not in email:
         raise SsoError("Microsoft did not return an email address for this account.")
-    if settings.sso_allowed_tenants and tid not in settings.sso_allowed_tenants:
-        raise SsoError("This Microsoft organization is not allowed to sign in.")
     if not email_domain_allowed(email):
         raise SsoError(f"Sign-in is limited to {', '.join(settings.sso_allowed_domains)} accounts.")
-    user = None
-    if oid:
-        user = db.execute(select(User).where(User.ms_oid == oid)).scalar_one_or_none()
+    # 1. The account this Microsoft identity already signed in as.
+    user = db.execute(select(User).where(User.ms_oid == oid)).scalar_one_or_none()
+    if user is not None and user.ms_tenant_id and user.ms_tenant_id != tid:
+        raise SsoError("This Microsoft account belongs to a different organization than the one on file.")
     if user is None:
+        # 2. First Microsoft sign-in for an account an admin created (or a password user
+        #    moving to SSO): link it by email, from an accepted tenant only (checked above).
+        #    An account already bound to another object id is never re-bound this way.
         user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if user is not None and user.ms_oid and user.ms_oid != oid:
+            raise SsoError("This email is already linked to a different Microsoft account. Ask an admin to reset the link.")
     if user is None:
         if not settings.sso_auto_provision:
             raise SsoError("No account exists for this email yet. Ask an admin to add you.")
@@ -149,9 +165,9 @@ def resolve_sso_user(db: Session, claims: dict) -> User:
         db.add(user)
     if user.active is False:
         raise SsoError("This account has been deactivated.")
-    user.ms_oid = user.ms_oid or oid
-    user.ms_tenant_id = tid or user.ms_tenant_id
-    if user.auth_provider == "local" and oid:
+    user.ms_oid = oid
+    user.ms_tenant_id = tid
+    if user.auth_provider == "local":
         user.auth_provider = "microsoft"
     if not user.name:
         user.name = name

@@ -85,9 +85,12 @@ def test_backfill_then_incremental(db):
     b = s.execute(select(Review).where(Review.external_id == "b")).scalar_one()
     assert b.rating == 3 and b.has_owner_reply and b.owner_reply_text == "sorry about that"
 
-    # Review c disappears from Google: a full pull marks it deleted, incremental does not.
+    # Review c disappears from Google: incremental pulls never remove, one full pull is a hold,
+    # the second consecutive full pull that misses it marks it removed.
     fake.reviews = fake.reviews[:2]
     sync_link(s, link, adapter=fake); s.commit()
+    assert not s.execute(select(Review).where(Review.external_id == "c")).scalar_one().is_deleted
+    sync_link(s, link, full=True, adapter=fake); s.commit()
     assert not s.execute(select(Review).where(Review.external_id == "c")).scalar_one().is_deleted
     sync_link(s, link, full=True, adapter=fake); s.commit()
     assert s.execute(select(Review).where(Review.external_id == "c")).scalar_one().is_deleted
@@ -207,8 +210,10 @@ def test_rating_change_removal_and_alerts(db):
     s, link = db
     fake = FakeAdapter([nr("p", 4, "pretty good", 0.3), nr("q", 1, "terrible", 0.2)])
     sync_link(s, link, full=True, adapter=fake); s.commit()
-    # the reviewer lowers p to 2 and q disappears on the next full pull
+    # the reviewer lowers p to 2 and q disappears; two consecutive full pulls confirm the removal
     fake2 = FakeAdapter([nr("p", 2, "pretty good", 0.3)])
+    sync_link(s, link, full=True, adapter=fake2); s.commit()
+    assert not s.execute(select(Review).where(Review.external_id == "q")).scalar_one().is_deleted
     sync_link(s, link, full=True, adapter=fake2); s.commit()
     p = s.execute(select(Review).where(Review.external_id == "p")).scalar_one()
     q = s.execute(select(Review).where(Review.external_id == "q")).scalar_one()
@@ -248,3 +253,99 @@ def test_rating_change_removal_and_alerts(db):
     n = FacebookPageAdapter.normalize(raw, "PAGE1")
     assert n.external_id == "1001_2002" and n.rating == 1 and n.owner_reply_text == "So sorry Jo, call us." and n.created_at == datetime(2026, 9, 30, 14, 5, 42)
     assert FacebookPageAdapter.normalize({"created_time": "2026-09-30T14:05:42+0000", "recommendation_type": "positive", "reviewer": {"name": "A"}}, "PAGE1").rating == 5
+
+
+class TruncatedAdapter(FakeAdapter):
+    """Yields its reviews but reports a platform total that says pages were dropped."""
+    def __init__(self, reviews, total):
+        super().__init__(reviews)
+        self.total = total
+
+    def fetch_reviews(self, link, since=None):
+        summary = SourceSummary(avg_rating=4.4, total_review_count=self.total)
+        for i, r in enumerate(self.reviews):
+            yield r, (summary if i == 0 else None)
+
+
+def test_removal_guards_and_restore(db, monkeypatch):
+    from app.alerts import collect, send_alerts
+    from app.models import ReportRecipient
+    s, link = db
+    s.add(ReportRecipient(email="ops@x.com", edition="alerts")); s.commit()
+    everything = [nr("a", 5, "great", 10), nr("b", 2, "slow", 5), nr("c", 4, "ok", 3), nr("d", 1, "awful", 2)]
+    sync_link(s, link, full=True, adapter=FakeAdapter(everything)); s.commit()
+    sync_link(s, link, full=True, adapter=FakeAdapter(everything)); s.commit()
+    # a truncated pull (saw 2, platform says 4) marks nothing even on the second miss
+    for _ in range(2):
+        sync_link(s, link, full=True, adapter=TruncatedAdapter(everything[:2], total=4)); s.commit()
+    s.expire_all()
+    assert not any(r.is_deleted for r in s.execute(select(Review)).scalars())
+    # a small discrepancy (platform total 4, we saw 3 of 3 remaining) is a real removal after two misses
+    three = everything[:3]
+    sync_link(s, link, full=True, adapter=FakeAdapter(three)); s.commit()
+    s.expire_all()
+    assert not s.execute(select(Review).where(Review.external_id == "d")).scalar_one().is_deleted
+    d = s.execute(select(Review).where(Review.external_id == "d")).scalar_one()
+    d.report_status = "reported"; s.commit()
+    sync_link(s, link, full=True, adapter=FakeAdapter(three)); s.commit()
+    s.expire_all()
+    d = s.execute(select(Review).where(Review.external_id == "d")).scalar_one()
+    assert d.is_deleted and d.report_status == "removed"
+    out = send_alerts(s, dry_run=True); s.commit(); s.expire_all()
+    assert out and "1 review removed" in out["subject"]
+    d = s.get(Review, d.id)
+    assert d.removal_notified_at is not None
+    # d comes back: restored, the removal alert is re-armed and the auto-closed report reopens
+    sync_link(s, link, full=True, adapter=FakeAdapter(everything)); s.commit(); s.expire_all()
+    d = s.get(Review, d.id)
+    assert d.is_deleted is False and d.removed_at is None and d.removal_notified_at is None and d.report_status == "reported"
+    kinds = [e.kind for e in d.events]
+    assert kinds.count("removed") == 1 and "restored" in kinds and kinds.count("report_outcome") == 2
+    assert collect(s).removed == []
+    # REMOVAL_CONFIRM_PULLS=1 restores the old single-pull behaviour
+    from app import sync as sync_mod
+    monkeypatch.setattr(sync_mod.settings, "removal_confirm_pulls", 1)
+    sync_link(s, link, full=True, adapter=FakeAdapter(three)); s.commit(); s.expire_all()
+    d = s.get(Review, d.id)
+    assert d.is_deleted and d.removal_notified_at is None     # it will be alerted again
+    assert {r.external_id for r in collect(s).removed} == {"d"}
+
+
+def test_sync_all_survives_a_poisoned_session(db, monkeypatch):
+    """A failed flush inside one listing's pull (the admin's manual Sync racing the worker) must
+    not abort the tick, lose the listing's fail_count, or skip the remaining listings."""
+    from app import sync as sync_mod
+    from app.models import SyncRun
+    from app.sync import sync_all
+    s, link = db
+    loc2 = Location(name="WashU Burbank", brand="WashU", state="IL", city="Burbank")
+    s.add(loc2); s.flush()
+    link2 = ReviewSourceLink(location_id=loc2.id, source="google", external_account_id="1", external_location_id="L2", display_name="WashU Burbank")
+    s.add(link2); s.commit()
+    poison = {"on": True}
+
+    class Racing(FakeAdapter):
+        def fetch_reviews(self, link, since=None):
+            yield from super().fetch_reviews(link, since)
+            if poison["on"] and link.external_location_id == "L1":
+                # a write that fails at flush: the session is unusable until rolled back
+                t = datetime.utcnow()
+                s.add(Review(source_link_id=999999, source="google", external_id="ghost", created_at_source=t, updated_at_source=t, raw_json="{}"))
+                s.flush()
+
+    monkeypatch.setattr(sync_mod, "get_adapter", lambda source: Racing([nr("x", 5, "fine", 1), nr("y", 3, "meh", 2)]))
+    totals = sync_all(s, full=True)
+    assert (totals["links"], totals["ok"], totals["error"]) == (2, 1, 1)
+    s.expire_all()
+    l1 = s.get(ReviewSourceLink, link.id); l2 = s.get(ReviewSourceLink, link2.id)
+    assert l1.last_sync_status == "error" and l1.fail_count == 1 and "FOREIGN KEY" in l1.last_error
+    assert l2.last_sync_status == "ok" and l2.fail_count == 0
+    assert s.execute(select(Review).where(Review.source_link_id == link2.id)).scalars().all().__len__() == 2
+    runs = s.execute(select(SyncRun).where(SyncRun.source_link_id == link.id)).scalars().all()
+    assert len(runs) == 1 and runs[0].status == "error" and runs[0].finished_at is not None
+    assert not s.execute(select(Review).where(Review.external_id == "ghost")).scalar_one_or_none()
+    # the next clean tick heals the listing
+    poison["on"] = False
+    totals = sync_all(s, full=True)
+    s.expire_all()
+    assert totals["error"] == 0 and s.get(ReviewSourceLink, link.id).fail_count == 0

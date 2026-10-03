@@ -6,7 +6,7 @@ from typing import Iterator
 
 import logging
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import create_engine, event, inspect, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 log = logging.getLogger(__name__)
@@ -38,11 +38,48 @@ def init_db() -> None:
 
 
 def _backfill() -> None:
-    """Idempotent data fixes that go with schema additions."""
+    """Idempotent data fixes that go with schema additions. Written with Core
+    expressions so each dialect renders its own literals (Postgres booleans
+    are true/false, not 1/0)."""
+    from .models import Review
     with engine.begin() as conn:
         # first_replied_at was added after replies existed; the platform reply time is the best estimate.
-        conn.execute(text("UPDATE reviews SET first_replied_at = owner_reply_updated_at "
-                          "WHERE first_replied_at IS NULL AND has_owner_reply = 1 AND owner_reply_updated_at IS NOT NULL"))
+        conn.execute(
+            update(Review)
+            .where(Review.first_replied_at.is_(None), Review.has_owner_reply.is_(True),
+                   Review.owner_reply_updated_at.isnot(None))
+            .values(first_replied_at=Review.owner_reply_updated_at))
+
+
+def column_ddl(table, col, dialect) -> str:
+    """ALTER TABLE statement that adds `col` the way `dialect` expects it.
+
+    Scalar defaults are rendered through the dialect's literal processor, so a
+    Boolean default becomes `true`/`false` on Postgres and `1`/`0` on SQLite.
+    A NOT NULL column gets NOT NULL only when a scalar default exists to fill
+    existing rows; a non-null column whose default is a Python callable (e.g.
+    utcnow) is added nullable and logged, because the rows that already exist
+    have no value for it and SQLite cannot tighten a column afterwards."""
+    ddl = f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(dialect)}"
+    default = col.default
+    if default is not None and getattr(default, "is_scalar", False):
+        val = default.arg
+        proc = col.type.literal_processor(dialect)
+        if proc is not None:
+            lit = proc(val)
+        elif isinstance(val, bool):
+            lit = "true" if val else "false"
+        elif isinstance(val, str):
+            lit = "'" + val.replace("'", "''") + "'"
+        else:
+            lit = str(val)
+        ddl += f" DEFAULT {lit}"
+        if not col.nullable:
+            ddl += " NOT NULL"
+    elif not col.nullable and not col.primary_key:
+        log.warning("schema: %s.%s is NOT NULL in the model but has no scalar default; "
+                    "adding it nullable so existing rows keep loading", table.name, col.name)
+    return ddl
 
 
 def _add_missing_columns(base) -> None:
@@ -55,12 +92,7 @@ def _add_missing_columns(base) -> None:
             for col in table.columns:
                 if col.name in existing:
                     continue
-                ddl = f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}'
-                if col.default is not None and getattr(col.default, "is_scalar", False):
-                    val = col.default.arg
-                    lit = "1" if val is True else "0" if val is False else repr(val) if isinstance(val, str) else str(val)
-                    ddl += f" DEFAULT {lit}"
-                conn.execute(text(ddl))
+                conn.execute(text(column_ddl(table, col, engine.dialect)))
                 log.info("schema: added %s.%s", table.name, col.name)
 
 

@@ -267,6 +267,9 @@ class SyncRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(20), default="running")  # running/ok/error
+    # False when a full pull returned nothing or fewer reviews than the platform's own total:
+    # the pull succeeded but proves nothing about removals, so it never confirms one.
+    complete: Mapped[bool] = mapped_column(Boolean, default=True)
     reviews_seen: Mapped[int] = mapped_column(Integer, default=0)
     reviews_new: Mapped[int] = mapped_column(Integer, default=0)
     reviews_updated: Mapped[int] = mapped_column(Integer, default=0)

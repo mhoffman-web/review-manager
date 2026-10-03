@@ -41,6 +41,9 @@ class Settings:
     sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "20"))
     # One full re-pull per day (catches reviews that were removed) at or after this local hour.
     full_sync_hour_local: int = int(os.getenv("FULL_SYNC_HOUR_LOCAL", "3"))
+    # A review is marked removed only after it has been missing from this many consecutive
+    # successful full pulls (2 = today's and yesterday's). 1 trusts a single pull.
+    removal_confirm_pulls: int = int(os.getenv("REMOVAL_CONFIRM_PULLS", "2"))
     # Instant alerts (new negative reviews, removed reviews, sync failures) go to the "alerts" recipient list.
     alert_negatives: bool = _bool(os.getenv("ALERT_NEGATIVES"), True)
     alert_fail_threshold: int = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
@@ -98,7 +101,9 @@ class Settings:
     # Only these email domains may sign in with Microsoft.
     sso_allowed_domains: List[str] = field(default_factory=lambda: [d.lower() for d in _csv(
         os.getenv("SSO_ALLOWED_DOMAINS", "washucarwash.com,washassociates.com,iconcarwash.com"))])
-    # Optional: pin to specific Entra tenant ids (comma-separated). Empty = any tenant, domain check still applies.
+    # Entra tenant ids (comma-separated) allowed to sign in. Required when MS_TENANT_ID is the
+    # multi-tenant "organizations"/"common": an email claim is only trustworthy from a tenant we
+    # know, because any stranger's own tenant can mint a user whose mail is one of ours.
     sso_allowed_tenants: List[str] = field(default_factory=lambda: _csv(os.getenv("SSO_ALLOWED_TENANTS")))
     # Create an agent account automatically on first Microsoft sign-in from an allowed domain.
     sso_auto_provision: bool = _bool(os.getenv("SSO_AUTO_PROVISION"), True)
@@ -106,8 +111,28 @@ class Settings:
     password_login_enabled: bool = _bool(os.getenv("PASSWORD_LOGIN_ENABLED"), True)
 
     @property
+    def sso_accepted_tenants(self) -> List[str]:
+        """Tenant ids whose id tokens we accept: the explicit allow-list, else the single
+        tenant the registration is pinned to. Empty means SSO is not safely configured."""
+        if self.sso_allowed_tenants:
+            return list(self.sso_allowed_tenants)
+        if self.ms_tenant and self.ms_tenant.lower() not in ("organizations", "common", "consumers"):
+            return [self.ms_tenant]
+        return []
+
+    @property
+    def sso_config_problem(self) -> Optional[str]:
+        """Why Microsoft sign-in is off although credentials exist, or None."""
+        if not (self.ms_client_id and self.ms_client_secret):
+            return None
+        if not self.sso_accepted_tenants:
+            return ("MS_TENANT_ID is multi-tenant and SSO_ALLOWED_TENANTS is empty; set SSO_ALLOWED_TENANTS "
+                    "to the Directory (tenant) IDs that may sign in. Microsoft sign-in stays off until then.")
+        return None
+
+    @property
     def sso_enabled(self) -> bool:
-        return bool(self.ms_client_id and self.ms_client_secret)
+        return bool(self.ms_client_id and self.ms_client_secret and self.sso_accepted_tenants)
 
     @property
     def ms_authority(self) -> str:
