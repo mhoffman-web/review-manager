@@ -37,8 +37,16 @@ review_manager/
 * **Listings** – source listings, mapping to sites, sync status, manual sync.
 * **Templates / Admin** – manage templates, users, and morning-report recipients
   in the browser (no CLI needed day to day).
-* **Morning email** – per-brand recipient groups, negatives, overdue list,
-  by-site table, negative themes, response-time stats.
+* **Morning email** – yesterday's reviews only: a by-site table of 1★–5★ counts
+  with totals and averages, then every review received, grouped by site. Three
+  editions: Illinois (WashU), Tennessee (ICON + Wash Associates) and Corporate
+  (everything, grouped by brand). Each recipient picks an edition on Admin →
+  Report recipients. Preview at `/reports/morning?edition=il|tn|all`.
+* **Rating distribution report** (`/reports/distribution`) – reviews by star
+  rating per site for any window, stacked bars plus a table, filtered by brand,
+  group and site.
+* **Filters are multi-select** – brands, groups, sites and ratings on the inbox;
+  brands, groups and sites on every report, always with the date range.
 * **Saved views and site groups** – any filter combination can be saved as a
   tab (shared with the team or private), e.g. "LW Negatives". Site groups
   (Admin → Site groups) let a regional manager filter to their stores.
@@ -58,9 +66,8 @@ review_manager/
   default `claude-opus-5-5`; phones per brand via `BRAND_PHONES`).
 * **Archive and Failed** – archive a review you will not answer (stops
   counting as unanswered); a Failed tab appears when a post to Google errors.
-* **More reporting** – review NPS (5★ minus ≤3★ share), rating-only share,
-  monthly summary table, location rank, replies by team member with median
-  and p90 time and template / AI share.
+* **More reporting** – rating-only share, monthly summary table, location rank,
+  replies by team member with median and p90 time and template / AI share.
 * **Date ranges everywhere** – inbox, reports, site and team pages share one
   control with the SYNC-style presets (Today, Yesterday, Last 7/30 days, This/Last
   week, This/Last month, This/Last quarter, Year to date, Last 12 months, All time)
@@ -144,14 +151,14 @@ Original checklist for reference:
 Recipients live in the `report_recipients` table. Each can be limited to brands.
 
 ```bash
-python cli.py add-recipient --email owner@washucarwash.com --name "Owner"
-python cli.py add-recipient --email il-ops@washucarwash.com --name "IL Ops" --brands "WashU"
-python cli.py add-recipient --email tn-ops@washucarwash.com --name "TN Ops" --brands "ICON;WA"
-python cli.py send-report --dry-run --out /tmp/report.html   # preview without sending
-python cli.py send-report --to you@washucarwash.com          # real send to one address
+python cli.py add-recipient --email owner@washucarwash.com --name "Owner" --edition all
+python cli.py add-recipient --email il-ops@washucarwash.com --name "IL Ops" --edition il
+python cli.py add-recipient --email tn-ops@washucarwash.com --name "TN Ops" --edition tn
+python cli.py send-report --dry-run --out /tmp/report.html         # writes report.il/.tn/.all.html
+python cli.py send-report --to you@washucarwash.com --edition tn   # real send of one edition
 ```
 
-Recipients with the same brand filter receive one tailored email. Sending
+Recipients of the same edition receive one email. Sending
 needs the `SMTP_*` settings in `.env`. For Microsoft 365, the sending mailbox
 must have SMTP AUTH enabled, or use an app password if MFA is enforced. The
 worker sends once per local day at `REPORT_HOUR_LOCAL` and records each send

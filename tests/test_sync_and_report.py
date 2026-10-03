@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.db import SessionLocal, engine, init_db
 from app.models import Base, Location, ReplyTemplate, Review, ReviewSourceLink, User
 from app.daterange import resolve_range
-from app.reports import build_report, build_trends, render_report_html, render_report_text, window_report
+from app.reports import build_digest, build_report, build_trends, digest_subject, render_digest_html, render_digest_text, render_report_html, render_report_text, window_report
 from app.sources.base import NormalizedReview, SourceSummary
 from app.sources.google import GoogleBusinessProfileAdapter, _parse_ts
 from app.sync import sync_link
@@ -34,6 +34,19 @@ class FakeAdapter:
 
     def delete_reply(self, link, external_review_id):
         self.posted.pop(external_review_id, None)
+
+
+def mk_yesterday(s, link):
+    """Insert one 2-star review stamped yesterday noon local time."""
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+    tz = ZoneInfo(settings.timezone)
+    local = (datetime.now(tz) - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+    t = local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    r = Review(source_link_id=link.id, source="google", external_id="yday", author_name="Dee P", rating=2, text="Gate would not open for my plate",
+               created_at_source=t, updated_at_source=t, has_owner_reply=False, raw_json="{}")
+    s.add(r); s.commit()
+    return r
 
 
 def nr(ext, rating, text, days_ago, reply=None):
@@ -93,6 +106,15 @@ def test_report_counts(db):
     html = render_report_html(d)
     assert "awful" in html and "WashU Berwyn" in html
     assert "Negative reviews" in render_report_text(d)
+    # yesterday digest editions: IL sees the WashU site, TN sees nothing, Corporate sees everything
+    yday = mk_yesterday(s, link)
+    il = build_digest(s, "il")
+    assert il.label == "Illinois" and il.total == 1 and il.sites[0].name == "WashU Berwyn" and il.counts[1] == 1
+    assert build_digest(s, "tn").total == 0 and build_digest(s, "all").total == 1
+    html = render_digest_html(il)
+    assert "Reviews received yesterday" in html and "Illinois" in html and "unanswered" not in html.lower() and yday.text in html
+    assert "WashU Berwyn" in render_digest_text(il)
+    assert digest_subject(il).startswith("Reviews ") and "IL: 1 received" in digest_subject(il)
     # Brand filter that matches nothing yields an empty report, not an error.
     assert build_report(s, brands=["ICON"]).new_24h == 0
 

@@ -23,6 +23,9 @@
 {% endif %}
 <main>{% block content %}{% endblock %}</main>
 <script src="/static/sort.js"></script>
+<script>(function(){document.querySelectorAll('details[data-ms]').forEach(function(d){var initial=null;d.addEventListener('toggle',function(){if(d.open){initial=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');}else{var now=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');if(initial!==null&&now!==initial){d.closest('form').requestSubmit();}}});
+d.querySelector('.ms-all').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=true;});});d.querySelector('.ms-none').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=false;});});});
+document.addEventListener('click',function(e){document.querySelectorAll('details[data-ms][open]').forEach(function(d){if(!d.contains(e.target))d.open=false;});});})();</script>
 <script>(function(){document.querySelectorAll('form').forEach(function(f){f.addEventListener('submit',function(){f.querySelectorAll('input,select').forEach(function(el){if(el.name&&el.value===''&&el.type!=='checkbox')el.disabled=true;});});});})();</script>
 <script>(function(){var b=document.getElementById('themeToggle');if(!b)return;function cur(){var t=document.documentElement.getAttribute('data-theme');if(t)return t;return window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
 function label(){b.textContent=cur()==='dark'?'Light mode':'Dark mode';}

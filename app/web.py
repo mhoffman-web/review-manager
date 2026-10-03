@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -17,13 +17,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from . import auth
 from .ai import AiUnavailable, draft_reply
-from .config import settings
+from .config import EDITIONS, settings
 from .db import get_db, session_scope
 from .models import (AiRule, Employee, Location, ReplyTemplate, ReportRecipient, Response as ReplyRow, Review,
                      ReviewMention, ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
 from .daterange import PRESETS, DateRange, resolve_range
-from .reports import (BRAND_COLORS, build_report, build_trends, employee_report, location_rank, monthly_summary,
-                      render_report_html, responder_stats, window_report)
+from .reports import (BRAND_COLORS, build_digest, build_trends, employee_report, location_rank, monthly_summary,
+                      rating_distribution, render_digest_html, responder_stats, window_report)
 from .sources import get_adapter
 from .sync import sync_all
 from .text_intel import THEMES as INTEL_THEMES, apply_intel, suggest_templates
@@ -88,25 +88,51 @@ templates.env.globals["brand_colors"] = BRAND_COLORS
 templates.env.globals["now_utc"] = datetime.utcnow
 templates.env.globals["THEMES"] = THEMES
 templates.env.globals["PRESETS"] = PRESETS
+templates.env.globals["EDITIONS"] = EDITIONS
 
 
 def _dr(range: str, start: str, end: str) -> DateRange:
     return resolve_range(range or "last30", start or "", end or "")
 
 
-def _group_ids(db: Session, group_id: int) -> Optional[List[int]]:
-    if not group_id:
-        return None
-    g = db.get(SiteGroup, group_id)
-    return [l.id for l in g.locations] if g else []
+def _ints(values) -> List[int]:
+    out: List[int] = []
+    for v in values or []:
+        for part in str(v).split(","):
+            part = part.strip()
+            if part and part != "0":
+                try:
+                    out.append(int(part))
+                except ValueError:
+                    pass
+    return out
 
 
-def _scope(db: Session, brand: str, group_id: int, location_id: int) -> Optional[List[int]]:
-    """Resolve group / site filters into a location id list (None = no restriction)."""
-    ids = _group_ids(db, group_id)
-    if location_id:
-        ids = [location_id] if (ids is None or location_id in ids) else []
+def _strs(values) -> List[str]:
+    out: List[str] = []
+    for v in values or []:
+        for part in str(v).split(","):
+            if part.strip():
+                out.append(part.strip())
+    return out
+
+
+def _scope(db: Session, group_ids: List[int], location_ids: List[int]) -> Optional[List[int]]:
+    """Resolve group + site multi-selects into one location id list (None = no restriction)."""
+    ids: Optional[List[int]] = None
+    if group_ids:
+        ids = []
+        for g in db.execute(select(SiteGroup).where(SiteGroup.id.in_(group_ids)).options(selectinload(SiteGroup.locations))).scalars().all():
+            ids.extend(l.id for l in g.locations)
+        ids = sorted(set(ids))
+    if location_ids:
+        ids = sorted(set(location_ids) if ids is None else set(ids) & set(location_ids))
     return ids
+
+
+def _filter_ctx(db: Session) -> dict:
+    return {"locations": db.execute(select(Location).where(Location.active.is_(True)).order_by(Location.brand, Location.name)).scalars().all(),
+            "groups": db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all(), "brands": _brands(db)}
 
 
 @app.exception_handler(HTTPException)
@@ -222,8 +248,8 @@ VIEWS = [("attention", "Needs attention"), ("unanswered", "Unanswered"), ("negat
 VIEW_KEYS = {k for k, _ in VIEWS}
 
 
-def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: int, rating: str, q: str, dr: Optional[DateRange],
-                 overdue_cut: datetime, group_location_ids: Optional[List[int]] = None):
+def _inbox_query(user: User, view: str, brands: List[str], scope_ids: Optional[List[int]], ratings: List[int], q: str, dr: Optional[DateRange],
+                 overdue_cut: datetime):
     base = (select(Review)
             .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
             .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
@@ -248,14 +274,12 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
         base = base.where(open_, Review.id.in_(failed_ids))
     elif view == "archived":
         base = base.where(Review.is_archived.is_(True))
-    if brand:
-        base = base.where(Location.brand == brand)
-    if location_id:
-        base = base.where(Location.id == location_id)
-    if group_id and group_location_ids is not None:
-        base = base.where(Location.id.in_(group_location_ids or [-1]))
-    if rating:
-        base = base.where(Review.rating == int(rating))
+    if brands:
+        base = base.where(Location.brand.in_(brands))
+    if scope_ids is not None:
+        base = base.where(Location.id.in_(scope_ids or [-1]))
+    if ratings:
+        base = base.where(Review.rating.in_(ratings))
     if dr is not None:
         base = base.where(Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
     if q:
@@ -266,9 +290,11 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
 
 @app.get("/", response_class=HTMLResponse)
 def inbox(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
-          view: str = "attention", brand: str = "", location_id: int = 0, group_id: int = 0, rating: str = "", q: str = "",
-          range: str = "", start: str = "", end: str = "", sv: int = 0, page: int = 1, sort: str = "", dir: str = "asc"):
+          view: str = "attention", brand: List[str] = Query([]), location_id: List[str] = Query([]), group_id: List[str] = Query([]),
+          rating: List[str] = Query([]), q: str = "", range: str = "", start: str = "", end: str = "", sv: int = 0, page: int = 1,
+          sort: str = "", dir: str = "asc"):
     per_page = 50
+    brands_f, loc_f, grp_f, rat_f = _strs(brand), _ints(location_id), _ints(group_id), _ints(rating)
     saved_views = db.execute(select(SavedView).where(or_(SavedView.is_shared.is_(True), SavedView.owner_id == user.id))
                              .order_by(SavedView.sort_order, SavedView.name)).scalars().all()
     active_view = None
@@ -276,21 +302,20 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
         active_view = next((v for v in saved_views if v.id == sv), None)
         if active_view:
             p = active_view.params()
-            view = p.get("view", view); brand = p.get("brand", ""); location_id = int(p.get("location_id", 0) or 0)
-            group_id = int(p.get("group_id", 0) or 0); rating = str(p.get("rating", "") or ""); q = p.get("q", "")
+            view = p.get("view", view); q = p.get("q", "")
+            brands_f = _strs(p.get("brands") or ([p["brand"]] if p.get("brand") else []))
+            loc_f = _ints(p.get("location_ids") or ([p["location_id"]] if p.get("location_id") else []))
+            grp_f = _ints(p.get("group_ids") or ([p["group_id"]] if p.get("group_id") else []))
+            rat_f = _ints(p.get("ratings") or ([p["rating"]] if p.get("rating") else []))
             range = p.get("range", ""); start = p.get("start", ""); end = p.get("end", "")
             if not range and p.get("days"):
-                range = {1: "yesterday", 7: "last7", 30: "last30", 90: "custom"}.get(int(p["days"]), "")
+                range = {1: "yesterday", 7: "last7", 30: "last30"}.get(int(p["days"]), "")
     if view not in VIEW_KEYS:
         view = "attention"
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
-    groups = db.execute(select(SiteGroup).options(selectinload(SiteGroup.locations)).order_by(SiteGroup.name)).scalars().all()
-    group_loc_ids = None
-    if group_id:
-        g = next((g for g in groups if g.id == group_id), None)
-        group_loc_ids = [l.id for l in g.locations] if g else []
+    scope_ids = _scope(db, grp_f, loc_f)
     dr = _dr(range, start, end) if (range or start or end) else None
-    base, order = _inbox_query(user, view, brand, location_id, group_id, rating, q, dr, overdue_cut, group_loc_ids)
+    base, order = _inbox_query(user, view, brands_f, scope_ids, rat_f, q, dr, overdue_cut)
     dir = "desc" if dir == "desc" else "asc"
     sort_cols = {
         "rating": (Review.rating,), "site": (Location.name,), "author": (Review.author_name,), "created": (Review.created_at_source,),
@@ -313,16 +338,17 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
         "replied": db.execute(all_base.where(Review.has_owner_reply.is_(True))).scalar(),
         "failed": db.execute(cbase.where(Review.id.in_(select(ReplyRow.review_id).where(ReplyRow.status == "failed")))).scalar(),
     }
-    locations = db.execute(select(Location).where(Location.active.is_(True)).order_by(Location.brand, Location.name)).scalars().all()
-    current_params = {"view": view, "brand": brand, "location_id": location_id, "group_id": group_id, "rating": rating, "q": q,
+    current_params = {"view": view, "brands": brands_f, "location_ids": loc_f, "group_ids": grp_f, "ratings": rat_f, "q": q,
                       "range": dr.preset if dr else "", "start": dr.start_date.isoformat() if (dr and dr.is_custom) else "",
                       "end": dr.end_date.isoformat() if (dr and dr.is_custom) else ""}
-    qs = "&".join(f"{k}={v}" for k, v in current_params.items())
+    qs_parts = [f"view={view}", f"q={q}", f"range={current_params['range']}", f"start={current_params['start']}", f"end={current_params['end']}"]
+    qs_parts += [f"brand={b}" for b in brands_f] + [f"location_id={i}" for i in loc_f] + [f"group_id={i}" for i in grp_f] + [f"rating={i}" for i in rat_f]
+    qs = "&".join(qs_parts)
+    filtered = bool(q or brands_f or loc_f or grp_f or rat_f or dr)
     return _render(request, "inbox.html", user, db, reviews=rows, total=total, page=page, per_page=per_page,
-                   view=view, views=VIEWS, brand=brand, location_id=location_id, group_id=group_id, groups=groups, rating=rating, q=q, dr=dr,
-                   counts=counts, locations=locations, brands=_brands(db), overdue_cut=overdue_cut,
-                   saved_views=saved_views, active_view=active_view, qs=qs, current_params_json=json.dumps(current_params),
-                   sort=sort, dir=dir)
+                   view=view, views=VIEWS, brands_f=brands_f, loc_f=loc_f, grp_f=grp_f, rat_f=rat_f, q=q, dr=dr, filtered=filtered,
+                   counts=counts, overdue_cut=overdue_cut, saved_views=saved_views, active_view=active_view, qs=qs,
+                   current_params_json=json.dumps(current_params), sort=sort, dir=dir, **_filter_ctx(db))
 
 
 @app.post("/groups")
@@ -527,36 +553,52 @@ def draft(review_id: int, user: User = Depends(auth.current_user), db: Session =
 
 # ----------------------------------------------------------------- reports
 @app.get("/reports", response_class=HTMLResponse)
-def reports(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: str = "", group_id: int = 0,
-            range: str = "last30", start: str = "", end: str = ""):
+def reports(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: List[str] = Query([]),
+            group_id: List[str] = Query([]), location_id: List[str] = Query([]), range: str = "last30", start: str = "", end: str = ""):
     dr = _dr(range, start, end)
-    bl = [brand] if brand else None
-    ids = _scope(db, brand, group_id, 0)
+    brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
+    ids = _scope(db, grp_f, loc_f)
+    bl = brands_f or None
     wr = window_report(db, dr, brands=bl, location_ids=ids)
     trends = build_trends(db, dr, brands=bl, location_ids=ids)
-    groups = db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all()
+    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
     return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends),
-                   brand=brand, brands=_brands(db), group_id=group_id, groups=groups,
+                   brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq,
                    monthly=monthly_summary(db, bl, months=12, location_ids=ids), responders=responder_stats(db, dr),
-                   rank=location_rank(db, dr, brands=bl, location_ids=ids), ai_enabled=settings.ai_enabled)
+                   rank=location_rank(db, dr, brands=bl, location_ids=ids), ai_enabled=settings.ai_enabled, **_filter_ctx(db))
+
+
+@app.get("/reports/distribution", response_class=HTMLResponse)
+def distribution_report(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: List[str] = Query([]),
+                        group_id: List[str] = Query([]), location_id: List[str] = Query([]), range: str = "last30", start: str = "", end: str = ""):
+    dr = _dr(range, start, end)
+    brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
+    ids = _scope(db, grp_f, loc_f)
+    dist = rating_distribution(db, dr, brands=brands_f or None, location_ids=ids)
+    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
+    return _render(request, "reports_distribution.html", user, db, dist=dist, dist_json=json.dumps(dist["chart"]), dr=dr,
+                   brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, **_filter_ctx(db))
 
 
 @app.get("/reports/morning", response_class=HTMLResponse)
-def morning_preview(user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: str = ""):
-    data = build_report(db, brands=[brand] if brand else None)
-    return HTMLResponse(render_report_html(data))
+def morning_preview(user: User = Depends(auth.current_user), db: Session = Depends(get_db), edition: str = "all", range: str = "yesterday",
+                    start: str = "", end: str = ""):
+    """Exactly what the email recipients see. `edition` = il / tn / all."""
+    d = build_digest(db, edition if edition in EDITIONS else "all", _dr(range, start, end))
+    return HTMLResponse(render_digest_html(d))
+
+
 
 
 @app.get("/reports/employees", response_class=HTMLResponse)
-def employees_report(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
-                     brand: str = "", group_id: int = 0, location_id: int = 0, range: str = "last30", start: str = "", end: str = ""):
+def employees_report(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: List[str] = Query([]),
+                     group_id: List[str] = Query([]), location_id: List[str] = Query([]), range: str = "last30", start: str = "", end: str = ""):
     dr = _dr(range, start, end)
-    ids = _scope(db, brand, group_id, location_id)
-    rep = employee_report(db, dr, brands=[brand] if brand else None, location_ids=ids)
-    locations = db.execute(select(Location).where(Location.active.is_(True)).order_by(Location.brand, Location.name)).scalars().all()
-    groups = db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all()
-    return _render(request, "reports_employees.html", user, db, rep=rep, dr=dr, brand=brand, brands=_brands(db), group_id=group_id, groups=groups,
-                   location_id=location_id, locations=locations)
+    brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
+    ids = _scope(db, grp_f, loc_f)
+    rep = employee_report(db, dr, brands=brands_f or None, location_ids=ids)
+    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
+    return _render(request, "reports_employees.html", user, db, rep=rep, dr=dr, brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, **_filter_ctx(db))
 
 
 @app.get("/sites/{location_id}", response_class=HTMLResponse)
@@ -693,14 +735,15 @@ def admin_recipients(request: Request, user: User = Depends(auth.admin_user), db
 
 @app.post("/admin/recipients")
 def save_recipient(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
-                   name: str = Form(""), brands: List[str] = Form([])):
+                   name: str = Form(""), edition: str = Form("all")):
     email = email.strip().lower()
     r = db.execute(select(ReportRecipient).where(ReportRecipient.email == email)).scalar_one_or_none()
     if r is None:
         r = ReportRecipient(email=email)
         db.add(r)
     r.name = name.strip() or None
-    r.brands = ";".join(brands) or None
+    r.edition = edition if edition in EDITIONS else "all"
+    r.brands = ";".join(EDITIONS[r.edition]["brands"] or []) or None
     r.active = True
     db.commit()
     return RedirectResponse(url="/admin/recipients", status_code=303)

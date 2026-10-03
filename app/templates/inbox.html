@@ -1,7 +1,7 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}
+{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import ms %}
 {% block content %}
 <div class="tabs">
-{% set rq = dr.query() if dr else '' %}{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?view={{ key }}&brand={{ brand }}&location_id={{ location_id }}&group_id={{ group_id }}&rating={{ rating }}&q={{ q }}&{{ rq }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
+{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
 {% if not counts.get('archived') %}<a href="/?view=archived" class="{% if view=='archived' %}active{% endif %} muted">Archived</a>{% endif %}
 </div>
 {% if saved_views or user %}
@@ -16,14 +16,14 @@
 {% endif %}
 <form class="filters" method="get" action="/"><input type="hidden" name="view" value="{{ view }}">
   <input type="search" name="q" value="{{ q }}" placeholder="Search review text or name">
-  <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
-  <select name="group_id" onchange="this.form.submit()"><option value="0">All groups</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id==group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>
-  <select name="location_id" onchange="this.form.submit()"><option value="0">All sites</option>{% for l in locations %}<option value="{{ l.id }}" {% if l.id==location_id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}</select>
-  <select name="rating" onchange="this.form.submit()"><option value="">Any rating</option>{% for s in [1,2,3,4,5] %}<option value="{{ s }}" {% if rating==s|string %}selected{% endif %}>{{ s }} star</option>{% endfor %}</select>
+  {{ ms('brand', 'All brands', brands|map('string')|list, brands_f, value_attr=None, label_attr=None) }}
+  {{ ms('group_id', 'All groups', groups, grp_f) }}
+  {{ ms('location_id', 'All sites', locations, loc_f, dot=True) }}
+  {{ ms('rating', 'Any rating', [{'id':5,'name':'5 star'},{'id':4,'name':'4 star'},{'id':3,'name':'3 star'},{'id':2,'name':'2 star'},{'id':1,'name':'1 star'}], rat_f) }}
   <span class="sep"></span>
   {{ range_fields(dr, allow_any=True) }}
   <button class="ghost">Apply</button>
-  {% if q or brand or location_id or rating or group_id or dr %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
+  {% if filtered %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
   <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if sort %} · sorted by {{ 'reviewer' if sort=='author' else sort }}{% elif view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
 </form>
 <div style="display:flex;gap:10px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">

@@ -194,3 +194,16 @@ a.cta.urgent { background:var(--critical); } a.cta.urgent:hover { background:#f0
 details.inline-form .popover { position:absolute; z-index:6; margin-top:6px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:14px 16px; min-width:320px; box-shadow:var(--shadow-raised); }
 details.inline-form { position:relative; }
 .site-picks { columns:2; font-size:12.5px; margin:8px 0 10px; } .site-picks label { display:block; margin:2px 0; }
+
+/* ---- multi-select */
+details.ms { position:relative; display:inline-block; }
+details.ms summary { list-style:none; display:inline-flex; align-items:center; gap:8px; height:36px; padding:0 10px; border-radius:var(--radius-sm); border:1px solid var(--line); background:var(--sunken); color:var(--ink); font:400 14px/1 var(--font-brand); cursor:pointer; white-space:nowrap; max-width:220px; }
+details.ms summary::-webkit-details-marker { display:none; } details.ms summary .ms-label { overflow:hidden; text-overflow:ellipsis; } details.ms summary .ms-caret { color:var(--muted); font-size:11px; }
+details.ms[open] summary { border-color:var(--icon-cyan); box-shadow:var(--focus-ring); }
+details.ms .ms-menu { position:absolute; z-index:7; top:40px; left:0; min-width:240px; max-height:320px; overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-md); padding:8px; box-shadow:var(--shadow-raised); }
+details.ms .ms-menu label { display:flex; gap:8px; align-items:center; padding:5px 6px; border-radius:4px; font-size:13px; cursor:pointer; white-space:nowrap; } details.ms .ms-menu label:hover { background:var(--icon-cyan-08); }
+details.ms .ms-tools { display:flex; gap:6px; padding:0 6px 6px; border-bottom:1px solid var(--line-soft); margin-bottom:4px; } details.ms .ms-tools button { background:none; border:0; color:var(--accent); font:600 11px/1 var(--font-brand); text-transform:uppercase; letter-spacing:var(--tracking-label); cursor:pointer; padding:4px 0; }
+:root[data-theme="light"] details.ms summary { background:var(--icon-white); }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) details.ms summary { background:var(--icon-white); } }
+.dist-legend { display:flex; gap:14px; font-size:12px; color:var(--ink-2); margin:0 0 8px; } .dist-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+.star-cell { font-variant-numeric:tabular-nums; }

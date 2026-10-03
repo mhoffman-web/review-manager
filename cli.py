@@ -148,15 +148,17 @@ def cmd_add_recipient(a):
         if r is None:
             r = ReportRecipient(email=a.email.lower())
             s.add(r)
-        r.name, r.brands, r.active = a.name, a.brands or None, not a.remove
-    print(f"recipient {a.email} {'removed' if a.remove else 'active'}" + (f" (brands: {a.brands})" if a.brands else ""))
+        r.name, r.active = a.name, not a.remove
+        r.edition = a.edition if a.edition in ("il", "tn", "all") else "all"
+        r.brands = {"il": "WashU", "tn": "ICON;WA", "all": None}[r.edition]
+    print(f"recipient {a.email} {'removed' if a.remove else 'active'} (edition: {a.edition})")
 
 
 def cmd_send_report(a):
     from app.reports import send_morning_report
     to = [x.strip() for x in a.to.split(",")] if a.to else None
     with session_scope() as s:
-        sends = send_morning_report(s, dry_run=a.dry_run, to_override=to, out_file=a.out)
+        sends = send_morning_report(s, dry_run=a.dry_run, to_override=to, out_file=a.out, edition=a.edition)
     for snd in sends:
         print(f"{snd.status}: {snd.recipients}" + (f" ({snd.error})" if snd.error else ""))
 
@@ -211,8 +213,8 @@ def main():
     sp = sub.add_parser("link-location"); sp.add_argument("--source-id", type=int, required=True); sp.add_argument("--location-id", type=int, required=True); sp.set_defaults(fn=cmd_link_location)
     sp = sub.add_parser("backfill", help="full pull of all history"); sp.add_argument("--source"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=True))
     sp = sub.add_parser("sync", help="incremental pull"); sp.add_argument("--source"); sp.add_argument("--full", action="store_true"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=a.full))
-    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--brands", help='e.g. "WashU" or "ICON;WA"'); sp.add_argument("--remove", action="store_true"); sp.set_defaults(fn=cmd_add_recipient)
-    sp = sub.add_parser("send-report"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--out", help="also write the HTML here"); sp.add_argument("--to", help="comma list, overrides stored recipients"); sp.set_defaults(fn=cmd_send_report)
+    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--edition", default="all", choices=["il", "tn", "all"], help="il = Illinois, tn = Tennessee, all = Corporate"); sp.add_argument("--remove", action="store_true"); sp.set_defaults(fn=cmd_add_recipient)
+    sp = sub.add_parser("send-report"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--out", help="also write the HTML here"); sp.add_argument("--to", help="comma list, overrides stored recipients"); sp.add_argument("--edition", default="all", choices=["il", "tn", "all"], help="with --to: which edition to send"); sp.set_defaults(fn=cmd_send_report)
     sp = sub.add_parser("classify-negatives", help="AI-group negative reviews into workbook categories"); sp.add_argument("--range", default="last30"); sp.add_argument("--start"); sp.add_argument("--end"); sp.add_argument("--force", action="store_true", help="re-classify reviews that already have a category"); sp.set_defaults(fn=cmd_classify)
     sub.add_parser("worker").set_defaults(fn=cmd_worker)
     sp = sub.add_parser("web"); sp.add_argument("--host", default="127.0.0.1"); sp.add_argument("--port", type=int, default=8000); sp.add_argument("--reload", action="store_true"); sp.set_defaults(fn=cmd_web)

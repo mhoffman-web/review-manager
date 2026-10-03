@@ -14,8 +14,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from .config import settings
-from .daterange import DateRange
+from .config import EDITIONS, settings
+from .daterange import DateRange, resolve_range
 from .models import Employee, Location, ReportRecipient, ReportSend, Response, Review, ReviewMention, ReviewSourceLink, User
 from .text_intel import THEMES
 
@@ -503,9 +503,146 @@ def employee_report(session: Session, dr: DateRange, brands: Optional[List[str]]
             "pct_of_text_reviews": round(100.0 * len(with_mentions) / len(with_text)) if with_text else 0, "sites": sites}
 
 
-# ----------------------------------------------------------------------------- email
+
+
+# ----------------------------------------------------------------------------- daily digest (the morning email)
+@dataclass
+class DigestSite:
+    name: str
+    brand: str
+    location_id: Optional[int] = None
+    counts: List[int] = field(default_factory=lambda: [0, 0, 0, 0, 0])   # 1★..5★
+    unrated: int = 0
+    reviews: List[Review] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts) + self.unrated
+
+    @property
+    def avg(self) -> Optional[float]:
+        n = sum(self.counts)
+        return round(sum((i + 1) * c for i, c in enumerate(self.counts)) / n, 2) if n else None
+
+    @property
+    def negatives(self) -> int:
+        return sum(self.counts[:settings.negative_rating_max])
+
+
+@dataclass
+class Digest:
+    edition: str
+    label: str
+    dr: DateRange
+    brands: Optional[List[str]]
+    sites: List[DigestSite] = field(default_factory=list)      # sites with reviews in the window, brand order
+    counts: List[int] = field(default_factory=lambda: [0, 0, 0, 0, 0])
+    unrated: int = 0
+    reviews: List[Review] = field(default_factory=list)        # all reviews in the window, brand/site/time order
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts) + self.unrated
+
+    @property
+    def avg(self) -> Optional[float]:
+        n = sum(self.counts)
+        return round(sum((i + 1) * c for i, c in enumerate(self.counts)) / n, 2) if n else None
+
+    @property
+    def negatives(self) -> int:
+        return sum(self.counts[:settings.negative_rating_max])
+
+    def by_brand(self) -> List[Any]:
+        out: Dict[str, List[DigestSite]] = {}
+        for site in self.sites:
+            out.setdefault(site.brand, []).append(site)
+        return [(b, out[b]) for b in sorted(out, key=lambda b: BRAND_ORDER.index(b) if b in BRAND_ORDER else 9)]
+
+
+def build_digest(session: Session, edition: str = "all", dr: Optional[DateRange] = None) -> Digest:
+    ed = EDITIONS.get(edition, EDITIONS["all"])
+    dr = dr or resolve_range("yesterday")
+    brands = ed["brands"]
+    reviews = _window_reviews(session, dr, brands, None)
+    sites: Dict[str, DigestSite] = {}
+    for r in reviews:
+        name = _site_name(r)
+        site = sites.setdefault(name, DigestSite(name=name, brand=r.location.brand if r.location else "?", location_id=r.location.id if r.location else None))
+        site.reviews.append(r)
+        if r.rating:
+            site.counts[r.rating - 1] += 1
+        else:
+            site.unrated += 1
+    d = Digest(edition=edition, label=ed["label"], dr=dr, brands=brands)
+    d.sites = sorted(sites.values(), key=lambda s: (BRAND_ORDER.index(s.brand) if s.brand in BRAND_ORDER else 9, s.name))
+    for site in d.sites:
+        site.reviews.sort(key=lambda r: r.created_at_source)
+        for i in range(5):
+            d.counts[i] += site.counts[i]
+        d.unrated += site.unrated
+        d.reviews.extend(site.reviews)
+    return d
+
+
+def render_digest_html(d: Digest) -> str:
+    tz = ZoneInfo(settings.timezone)
+    return _env.get_template("report_email.html").render(d=d, settings=settings, to_local=lambda dt: dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz))
+
+
+def render_digest_text(d: Digest) -> str:
+    lines = [f"Reviews received {d.dr.label.lower()} ({d.dr.start_date:%a %b %-d}) — {d.label}",
+             f"Total {d.total} · avg {d.avg or '-'} · 1★ {d.counts[0]} · 2★ {d.counts[1]} · 3★ {d.counts[2]} · 4★ {d.counts[3]} · 5★ {d.counts[4]}", ""]
+    lines.append(f"{'Site':<28} {'1★':>4}{'2★':>4}{'3★':>4}{'4★':>4}{'5★':>4} {'Total':>6} {'Avg':>5}")
+    for s in d.sites:
+        lines.append(f"{s.name:<28} " + "".join(f"{c:>4}" for c in s.counts) + f" {s.total:>6} {s.avg or '-':>5}")
+    lines.append("")
+    for s in d.sites:
+        lines.append(f"-- {s.name}")
+        for r in s.reviews:
+            tz = ZoneInfo(settings.timezone)
+            t = r.created_at_source.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz).strftime("%-I:%M %p")
+            lines.append(f"  {r.rating or '-'}★ {t} {r.author_name or 'Anonymous'}: {(r.text or '(rating only)')[:200]}")
+    return "\n".join(lines)
+
+
+def digest_subject(d: Digest) -> str:
+    return (f"Reviews {d.dr.start_date:%a %b %-d} · {EDITIONS[d.edition]['short']}: {d.total} received"
+            + (f", avg {d.avg}" if d.avg else "") + (f", {d.negatives} negative" if d.negatives else ""))
+
+
+# ----------------------------------------------------------------------------- rating distribution by site
+def rating_distribution(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    rows: Dict[str, Dict[str, Any]] = {}
+    for r in _window_reviews(session, dr, brands, location_ids):
+        name = _site_name(r)
+        row = rows.setdefault(name, {"name": name, "brand": r.location.brand if r.location else "?", "location_id": r.location.id if r.location else None,
+                                     "counts": [0, 0, 0, 0, 0], "unrated": 0})
+        if r.rating:
+            row["counts"][r.rating - 1] += 1
+        else:
+            row["unrated"] += 1
+    out = []
+    totals = [0, 0, 0, 0, 0]
+    for row in rows.values():
+        n = sum(row["counts"])
+        row["total"] = n + row["unrated"]
+        row["avg"] = round(sum((i + 1) * c for i, c in enumerate(row["counts"])) / n, 2) if n else None
+        row["pct"] = [round(100.0 * c / n, 1) if n else 0 for c in row["counts"]]
+        row["neg_pct"] = round(100.0 * sum(row["counts"][:settings.negative_rating_max]) / n, 1) if n else 0
+        for i in range(5):
+            totals[i] += row["counts"][i]
+        out.append(row)
+    out.sort(key=lambda x: (BRAND_ORDER.index(x["brand"]) if x["brand"] in BRAND_ORDER else 9, -x["total"]))
+    n = sum(totals)
+    return {"rows": out, "totals": totals, "total": n + sum(r["unrated"] for r in out),
+            "avg": round(sum((i + 1) * c for i, c in enumerate(totals)) / n, 2) if n else None,
+            "pct": [round(100.0 * c / n, 1) if n else 0 for c in totals],
+            "chart": {"labels": [r["name"] for r in out], "series": [[r["counts"][i] for r in out] for i in range(5)]}}
+
+# ----------------------------------------------------------------------------- email (legacy renderers kept for tests)
 def render_report_html(data: ReportData) -> str:
-    tpl = _env.get_template("report_email.html")
+    tpl = _env.get_template("report_email_legacy.html")
     tz = ZoneInfo(settings.timezone)
     return tpl.render(d=data, settings=settings, tz=tz, to_local=lambda dt: dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz))
 
@@ -528,41 +665,37 @@ def render_report_text(data: ReportData) -> str:
 
 
 def recipient_groups(session: Session) -> Dict[str, List[str]]:
+    """Active recipients by digest edition (il / tn / all)."""
     rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True))).scalars().all()
     groups: Dict[str, List[str]] = {}
     for r in rows:
-        key = ";".join(sorted(r.brand_list()))
-        groups.setdefault(key, []).append(r.email)
+        ed = r.edition if r.edition in EDITIONS else "all"
+        groups.setdefault(ed, []).append(r.email)
     if not groups and settings.report_recipients_fallback:
-        groups[""] = list(settings.report_recipients_fallback)
+        groups["all"] = list(settings.report_recipients_fallback)
     return groups
 
 
 def send_morning_report(session: Session, dry_run: bool = False, to_override: Optional[List[str]] = None,
-                        out_file: Optional[str] = None) -> List[ReportSend]:
+                        out_file: Optional[str] = None, edition: Optional[str] = None) -> List[ReportSend]:
+    """Yesterday's reviews, one email per edition (Illinois, Tennessee, Corporate)."""
     from .mailer import send_email
 
     tz = ZoneInfo(settings.timezone)
     today = datetime.now(tz).strftime("%Y-%m-%d")
-    groups = {"": to_override} if to_override else recipient_groups(session)
+    groups = {edition or "all": to_override} if to_override else recipient_groups(session)
     sends: List[ReportSend] = []
     if not groups:
         log.warning("no report recipients configured; nothing sent")
         return sends
-    for key, emails in groups.items():
-        brands = [b for b in key.split(";") if b]
-        data = build_report(session, brands=brands or None)
-        html = render_report_html(data)
-        text = render_report_text(data)
-        scope = ", ".join(brands) if brands else "All sites"
-        subject = f"Reviews {data.as_of_local:%a %b %-d}: {data.new_24h} new, {len(data.negative_24h)} negative, {data.unanswered_total} unanswered ({scope})"
+    for ed, emails in groups.items():
+        d = build_digest(session, ed)
+        html, text, subject = render_digest_html(d), render_digest_text(d), digest_subject(d)
         if out_file:
-            suffix = f".{key.replace(';', '_')}" if key else ""
             p = Path(out_file)
-            target = p.with_name(p.stem + suffix + p.suffix) if key else p
-            target.write_text(html)
-            log.info("wrote %s", target)
-        send = ReportSend(report_date=today, brands=key or None, recipients=", ".join(emails))
+            p.with_name(f"{p.stem}.{ed}{p.suffix}").write_text(html)
+            log.info("wrote %s", p.with_name(f"{p.stem}.{ed}{p.suffix}"))
+        send = ReportSend(report_date=today, brands=ed, recipients=", ".join(emails))
         if dry_run:
             send.status = "dry-run"
             print(f"--- {subject}\n--- to: {', '.join(emails)}\n{text}\n")

@@ -1,0 +1,22 @@
+{# Multi-select dropdown: a <details> with checkboxes. Submits its form when closed after a change. #}
+{% macro ms(name, label, options, selected, value_attr='id', label_attr='name', dot=False) -%}
+{% set sel = selected|map('string')|list %}
+<details class="ms" data-ms><summary><span class="ms-label">{% if sel|length == 0 %}{{ label }}{% elif sel|length == 1 %}{% for o in options %}{% if (o[value_attr] if value_attr else o)|string in sel %}{{ (o[label_attr] if label_attr else o) }}{% endif %}{% endfor %}{% else %}{{ label }} · {{ sel|length }}{% endif %}</span><span class="ms-caret">▾</span></summary>
+<div class="ms-menu">
+  <div class="ms-tools"><button type="button" class="ms-all">All</button><button type="button" class="ms-none">None</button></div>
+  {% for o in options %}{% set v = (o[value_attr] if value_attr else o)|string %}<label><input type="checkbox" name="{{ name }}" value="{{ v }}" {% if v in sel %}checked{% endif %}>{% if dot %}<span class="dot {{ o.brand }}"></span>{% endif %}{{ (o[label_attr] if label_attr else o) }}</label>{% endfor %}
+</div></details>
+{%- endmacro %}
+{# Standard report filter row: brands, groups, sites + date range. Expects brands, groups, locations, brands_f, grp_f, loc_f, dr in context. #}
+{% macro report_filters(action, dr, brands, groups, locations, brands_f, grp_f, loc_f, extra='') -%}
+{% from "_range.html" import range_fields %}
+<form class="filters" method="get" action="{{ action }}">
+  {{ ms('brand', 'All brands', brands|map('string')|list, brands_f, value_attr=None, label_attr=None) }}
+  {{ ms('group_id', 'All groups', groups, grp_f) }}
+  {{ ms('location_id', 'All sites', locations, loc_f, dot=True) }}
+  <span class="sep"></span>
+  {{ range_fields(dr) }}
+  <button class="ghost">Apply</button>
+  {{ extra|safe }}
+</form>
+{%- endmacro %}

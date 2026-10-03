@@ -104,3 +104,10 @@ class Settings:
 
 
 settings = Settings()
+
+# Morning digest editions. Brands map to the markets the owner reports on.
+EDITIONS = {
+    "il": {"label": "Illinois", "short": "IL", "brands": ["WashU"]},
+    "tn": {"label": "Tennessee", "short": "TN", "brands": ["ICON", "WA"]},
+    "all": {"label": "All locations", "short": "Corporate", "brands": None},
+}

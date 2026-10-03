@@ -1,68 +1,37 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Review report</title></head>
+<!doctype html><html><head><meta charset="utf-8"><title>Reviews received</title></head>
 <body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2328;font-size:15px;line-height:1.45">
 <div style="max-width:720px;margin:0 auto;padding:20px">
-  <h2 style="margin:0 0 4px">Reviews for {{ d.as_of_local.strftime('%A, %B %-d') }}{% if d.brands %} · {{ d.brands|join(', ') }}{% endif %}</h2>
-  <p style="margin:0 0 16px;color:#6b7280">Window: {{ d.window_start_local.strftime('%b %-d %-I:%M %p') }} to {{ d.as_of_local.strftime('%b %-d %-I:%M %p') }} ({{ settings.timezone.split('/')[-1].replace('_',' ') }})</p>
+  <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#009ace">{{ d.label }}</p>
+  <h2 style="margin:0 0 4px">Reviews received {{ d.dr.label|lower }} · {{ d.dr.start_date.strftime('%A, %B %-d') }}</h2>
+  <p style="margin:0 0 16px;color:#6b7280">{{ d.total }} review{{ '' if d.total==1 else 's' }}{% if d.avg %} · average {{ d.avg }}{% endif %}{% if d.negatives %} · <span style="color:#b91c1c">{{ d.negatives }} negative</span>{% endif %}</p>
 
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:16px"><tr>
-    {% for v,l in [(d.new_24h,'New reviews'), (d.avg_24h or '–','Avg rating 24h'), (d.totals_30d or '–','Avg rating 30d'), ((d.response_rate_30d|int ~ '%') if d.response_rate_30d is not none else '–','Resp. rate 30d'), (d.unanswered_total,'Unanswered'), (d.overdue_total,'Overdue')] %}
-    <td style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;text-align:center;width:16%"><div style="font-size:22px;font-weight:700;{% if l=='Overdue' and v %}color:#b91c1c{% endif %}">{{ v }}</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em">{{ l }}</div></td>
-    {% endfor %}
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:16px;border-collapse:separate;border-spacing:6px 0"><tr>
+    {% for i in [0,1,2,3,4] %}<td style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 6px;text-align:center;width:20%"><div style="font-size:22px;font-weight:700;{% if i < 3 and d.counts[i] %}color:#b91c1c{% endif %}">{{ d.counts[i] }}</div><div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em">{{ i+1 }} star</div></td>{% endfor %}
   </tr></table>
-
-  {% if d.negative_24h %}
-  <div style="background:#fff;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:16px">
-    <h3 style="margin:0 0 8px;color:#b91c1c">Negative reviews in the last 24 hours ({{ d.negative_24h|length }})</h3>
-    {% for r in d.negative_24h %}
-    <div style="padding:8px 0;border-top:1px solid #f3f4f6">
-      <div><span style="color:#b91c1c">{% for i in range(r.rating) %}&#9733;{% endfor %}</span> <strong>{{ r.location.name if r.location else '?' }}</strong> <span style="color:#6b7280">· {{ r.author_name or 'Anonymous' }} · {{ to_local(r.created_at_source).strftime('%-I:%M %p') }}</span>
-        {% if r.has_owner_reply %}<span style="color:#15803d">· replied</span>{% endif %}</div>
-      <div style="margin:4px 0">{{ (r.text or '(no text)')[:400] }}{% if r.text and r.text|length > 400 %}…{% endif %}</div>
-      <a href="{{ settings.app_base_url }}/reviews/{{ r.id }}" style="color:#1d4ed8">Reply in Review Manager</a>
-    </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <p style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin-bottom:16px;color:#15803d">No negative reviews in the last 24 hours.</p>
-  {% endif %}
-
-  {% if d.overdue_list %}
-  <div style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;margin-bottom:16px">
-    <h3 style="margin:0 0 8px;color:#b45309">Unanswered for more than {{ settings.overdue_hours }} hours ({{ d.overdue_list|length }})</h3>
-    {% for r in d.overdue_list[:15] %}
-    <div style="padding:6px 0;border-top:1px solid #f3f4f6"><span style="color:#f59e0b">{% for i in range(r.rating or 0) %}&#9733;{% endfor %}</span> <strong>{{ r.location.name if r.location else '?' }}</strong> <span style="color:#6b7280">· {{ to_local(r.created_at_source).strftime('%b %-d') }}</span> — {{ (r.text or '(no text)')[:160] }} <a href="{{ settings.app_base_url }}/reviews/{{ r.id }}" style="color:#1d4ed8">reply</a></div>
-    {% endfor %}
-    {% if d.overdue_list|length > 15 %}<p style="color:#6b7280;margin:8px 0 0">…and {{ d.overdue_list|length - 15 }} more in the <a href="{{ settings.app_base_url }}/?view=unanswered" style="color:#1d4ed8">inbox</a>.</p>{% endif %}
-  </div>
-  {% endif %}
-
-  {% if d.negative_themes_30d %}
-  <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:16px">
-    <h3 style="margin:0 0 8px">What negative reviews are about (30 days)</h3>
-    <table cellspacing="0" cellpadding="0" style="font-size:13px">{% for cat, n in d.negative_themes_30d %}<tr><td style="padding:3px 14px 3px 0">{{ cat }}</td><td style="padding:3px 0"><span style="display:inline-block;height:9px;width:{{ (160*n/d.negative_themes_30d[0][1])|int }}px;background:#2a78d6;border-radius:4px;vertical-align:middle"></span> <span style="color:#6b7280">{{ n }}</span></td></tr>{% endfor %}</table>
-    <p style="margin:8px 0 0;color:#6b7280;font-size:12px">Median response time {{ d.median_response_h_30d or '–' }}h · p90 {{ d.p90_response_h_30d or '–' }}h</p>
-  </div>
-  {% endif %}
 
   <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:16px">
     <h3 style="margin:0 0 8px">By site</h3>
-    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px">
-      <tr style="color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.04em"><td style="padding:6px 4px">Site</td><td align="right" style="padding:6px 4px">New 24h</td><td align="right" style="padding:6px 4px">7d avg</td><td align="right" style="padding:6px 4px">30d avg</td><td align="right" style="padding:6px 4px">30d #</td><td align="right" style="padding:6px 4px">Resp. rate</td><td align="right" style="padding:6px 4px">Open</td><td align="right" style="padding:6px 4px">Listing</td></tr>
-      {% set ns = namespace(brand=None) %}
-      {% for s in d.sites %}
-      {% if s.brand != ns.brand %}{% set ns.brand = s.brand %}<tr><td colspan="8" style="padding:8px 4px 2px;font-weight:700;color:#374151;border-top:1px solid #e5e7eb">{{ s.brand }}</td></tr>{% endif %}
-      <tr style="border-top:1px solid #f3f4f6">
-        <td style="padding:5px 4px">{{ s.name }}</td>
-        <td align="right" style="padding:5px 4px;{% if s.new_24h %}font-weight:700{% endif %}">{{ s.new_24h }}</td>
-        <td align="right" style="padding:5px 4px;{% if s.avg_7d and s.avg_7d < 4 %}color:#b91c1c{% endif %}">{{ s.avg_7d or '–' }}</td>
-        <td align="right" style="padding:5px 4px">{{ s.avg_30d or '–' }}</td>
-        <td align="right" style="padding:5px 4px">{{ s.count_30d }}</td>
-        <td align="right" style="padding:5px 4px">{% if s.response_rate_30d is not none %}{{ s.response_rate_30d|int }}%{% else %}–{% endif %}</td>
-        <td align="right" style="padding:5px 4px;{% if s.overdue %}color:#b91c1c;font-weight:700{% endif %}">{{ s.unanswered }}</td>
-        <td align="right" style="padding:5px 4px;color:#6b7280">{{ s.listing_avg or '–' }}{% if s.listing_total %} ({{ s.listing_total }}){% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
+    {% if d.sites %}<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px">
+      <tr style="color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.04em"><td style="padding:6px 4px">Site</td>{% for i in [1,2,3,4,5] %}<td align="right" style="padding:6px 4px">{{ i }}★</td>{% endfor %}<td align="right" style="padding:6px 4px">Total</td><td align="right" style="padding:6px 4px">Avg</td></tr>
+      {% for brand, sites in d.by_brand() %}{% if d.by_brand()|length > 1 %}<tr><td colspan="8" style="padding:8px 4px 2px;font-weight:700;color:#374151;border-top:1px solid #e5e7eb">{{ brand }}</td></tr>{% endif %}
+      {% for s in sites %}<tr style="border-top:1px solid #f3f4f6"><td style="padding:5px 4px">{{ s.name }}</td>{% for c in s.counts %}<td align="right" style="padding:5px 4px;{% if loop.index <= 3 and c %}color:#b91c1c;font-weight:700{% endif %}">{{ c or '' }}</td>{% endfor %}<td align="right" style="padding:5px 4px;font-weight:700">{{ s.total }}</td><td align="right" style="padding:5px 4px">{{ s.avg or '–' }}</td></tr>{% endfor %}{% endfor %}
+      <tr style="border-top:2px solid #e5e7eb;font-weight:700"><td style="padding:6px 4px">Total</td>{% for c in d.counts %}<td align="right" style="padding:6px 4px">{{ c }}</td>{% endfor %}<td align="right" style="padding:6px 4px">{{ d.total }}</td><td align="right" style="padding:6px 4px">{{ d.avg or '–' }}</td></tr>
+    </table>{% else %}<p style="color:#6b7280;margin:0">No reviews were received.</p>{% endif %}
   </div>
-  <p style="color:#9ca3af;font-size:12px">Sent automatically by Review Manager. Open the <a href="{{ settings.app_base_url }}/reports" style="color:#6b7280">live report</a>.</p>
+
+  {% for s in d.sites %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:12px">
+    <h3 style="margin:0 0 6px">{{ s.name }} <span style="color:#6b7280;font-weight:400;font-size:13px">· {{ s.total }} review{{ '' if s.total==1 else 's' }}{% if s.avg %}, avg {{ s.avg }}{% endif %}</span></h3>
+    {% for r in s.reviews %}
+    <div style="padding:8px 0;border-top:1px solid #f3f4f6">
+      <div><span style="color:{% if r.is_negative %}#b91c1c{% else %}#009ace{% endif %};letter-spacing:1px">{% for i in range(r.rating or 0) %}&#9733;{% endfor %}<span style="color:#d1d5db">{% for i in range(5 - (r.rating or 0)) %}&#9733;{% endfor %}</span></span>
+        <strong style="margin-left:6px">{{ r.author_name or 'Anonymous' }}</strong> <span style="color:#6b7280">· {{ to_local(r.created_at_source).strftime('%-I:%M %p') }}</span>
+        {% if r.has_owner_reply %}<span style="color:#15803d;font-size:12px;margin-left:6px">replied</span>{% endif %}</div>
+      <div style="margin:3px 0 0;{% if r.is_rating_only %}color:#9ca3af;font-style:italic{% endif %}">{{ r.text or 'Rating only, no written review' }}</div>
+      <a href="{{ settings.app_base_url }}/reviews/{{ r.id }}" style="color:#1d4ed8;font-size:12px">Open in Review Manager</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <p style="color:#9ca3af;font-size:12px">Sent automatically by Review Manager each morning. <a href="{{ settings.app_base_url }}/reports/distribution?range=yesterday" style="color:#6b7280">Rating distribution</a> · <a href="{{ settings.app_base_url }}/reports" style="color:#6b7280">Reports</a></p>
 </div></body></html>

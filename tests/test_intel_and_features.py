@@ -9,7 +9,7 @@ from app.db import SessionLocal, engine, init_db
 from app.models import (AiRule, Base, Employee, Location, ReplyTemplate, Response, Review, ReviewMention,
                         ReviewSourceLink, SavedView, SiteGroup, User)
 from app.daterange import resolve_range
-from app.reports import build_trends, employee_report, monthly_summary, responder_stats, window_report
+from app.reports import build_trends, employee_report, monthly_summary, rating_distribution, responder_stats, window_report
 from app.text_intel import apply_intel, build_roster, classify_theme, detect_mentions, suggest_templates
 
 
@@ -164,8 +164,21 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     # date-range filters on inbox and reports, including a custom window
     assert "Line wrapped" in c.get("/?view=all&range=last7").text
     assert "Line wrapped" not in c.get("/?view=all&range=custom&start=2020-01-01&end=2020-01-31").text
-    for path in ["/reports?range=last_month", "/reports?range=custom&start=2026-09-01&end=2026-09-15&brand=ICON", f"/sites/{loc.id}?range=ytd", "/reports/employees?range=last_week"]:
+    for path in ["/reports?range=last_month", "/reports?range=custom&start=2026-09-01&end=2026-09-15&brand=ICON", f"/sites/{loc.id}?range=ytd",
+                 "/reports/employees?range=last_week", f"/reports/distribution?range=last30&location_id={loc.id}&group_id={g.id}", "/reports/morning?edition=tn",
+                 "/reports/morning?edition=il&range=last7", "/admin/recipients"]:
         assert c.get(path).status_code == 200, path
+    # multi-select inbox filters: two ratings, a site and a group at once
+    multi = c.get(f"/?view=all&rating=1&rating=5&location_id={loc.id}&group_id={g.id}&brand=ICON").text
+    assert "Line wrapped" in multi and "Nice wash" not in multi
+    assert "NPS" not in c.get("/reports").text
+    dist = rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])
+    assert dist["rows"][0]["name"] == "ICON Thompson Lane" and sum(dist["totals"]) == dist["total"] and dist["chart"]["labels"] == ["ICON Thompson Lane"]
+    r3 = c.post("/admin/recipients", data={"email": "tn@x.com", "name": "TN", "edition": "tn"}, follow_redirects=False)
+    assert r3.status_code == 303
+    s.expire_all()
+    from app.models import ReportRecipient
+    assert s.execute(select(ReportRecipient).where(ReportRecipient.email == "tn@x.com")).scalar_one().edition == "tn"
     mk(s, link, "w3", 4, "Nice wash, quick line", author="Kim Z", days_ago=0.2); s.commit()
     page = c.get("/?view=all").text
     assert "Reviewer" in page and "Reply to review" in page and "Claim" not in page and "New site group" in page

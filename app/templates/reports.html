@@ -1,22 +1,16 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_fields, range_label %}
+{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Reports{% if brand %} · {{ brand }}{% endif %}</h1><span class="muted small">{{ range_label(dr) }}</span>
-  <form class="right filters" style="margin:0" method="get" action="/reports">
-    <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
-    <select name="group_id" onchange="this.form.submit()"><option value="0">All groups</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id==group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>
-    {{ range_fields(dr) }}
-    <button class="ghost">Apply</button>
-    <a href="/reports/morning{% if brand %}?brand={{ brand }}{% endif %}" target="_blank" class="small">Morning email &rarr;</a>
-  </form></div>
+<div class="page-head"><h1>Reports</h1><span class="muted small">{{ range_label(dr) }}</span>
+  <span class="right small"><a href="/reports/distribution?{{ fq }}">Rating distribution by site &rarr;</a> · <a href="/reports/employees?{{ fq }}">Team &rarr;</a> · <a href="/reports/morning" target="_blank">Morning email</a></span></div>
+{{ report_filters('/reports', dr, brands, groups, locations, brands_f, grp_f, loc_f) }}
 
 <div class="tiles">
   <div class="tile"><div class="v">{{ w.count }}</div><div class="l">Reviews</div><div class="sub">{{ w.rating_only_pct|int if w.rating_only_pct is not none else 0 }}% rating only</div></div>
-  <div class="tile"><div class="v">{{ w.avg or '–' }}</div><div class="l">Avg rating</div><div class="sub">{{ w.promoter_pct or 0 }}% 5★ · {{ w.detractor_pct or 0 }}% ≤3★</div></div>
+  <div class="tile"><div class="v">{{ w.avg or '–' }}</div><div class="l">Avg rating</div><div class="sub">{{ w.promoter_pct or 0 }}% five-star</div></div>
   <div class="tile {% if w.negative_pct and w.negative_pct > 8 %}warn{% endif %}"><div class="v">{{ w.negatives }}</div><div class="l">Negative (≤3★)</div><div class="sub">{{ w.negative_pct or 0 }}% of reviews</div></div>
   <div class="tile"><div class="v">{% if w.response_rate is not none %}{{ w.response_rate|int }}%{% else %}–{% endif %}</div><div class="l">Response rate</div><div class="sub">{{ w.answered }} of {{ w.count }} answered</div></div>
   <div class="tile"><div class="v">{{ w.median_response_h|hours }}</div><div class="l">Median response</div><div class="sub">p90 {{ w.p90_response_h|hours }}</div></div>
-  <div class="tile"><div class="v">{{ w.nps if w.nps is not none else '–' }}</div><div class="l">Review NPS</div><div class="sub">5★ share minus ≤3★ share</div></div>
   <div class="tile {% if w.overdue_now %}bad{% endif %}"><div class="v">{{ w.unanswered_now }}</div><div class="l">Still unanswered</div><div class="sub">{{ w.overdue_now }} overdue &gt;{{ settings.overdue_hours }}h</div></div>
 </div>
 
@@ -48,7 +42,7 @@
 
 <div class="card table-scroll"><h3>Negative review reasons</h3>
   <p class="muted small" style="margin:-4px 0 10px">{{ w.negatives }} negative reviews in {{ range_label(dr) }}, grouped into the workbook categories{% if ai_enabled %} by AI{% else %} by keyword rules (set ANTHROPIC_API_KEY for AI grouping){% endif %}.
-  {% if user.is_admin and ai_enabled %}<form method="post" action="/admin/ai/classify" style="display:inline"><input type="hidden" name="range" value="{{ dr.preset }}"><input type="hidden" name="start" value="{{ dr.start_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="end" value="{{ dr.end_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="back" value="/reports?{{ dr.query() }}&brand={{ brand }}&group_id={{ group_id }}"><button class="ghost small">Re-group this window with AI</button></form>{% endif %}</p>
+  {% if user.is_admin and ai_enabled %}<form method="post" action="/admin/ai/classify" style="display:inline"><input type="hidden" name="range" value="{{ dr.preset }}"><input type="hidden" name="start" value="{{ dr.start_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="end" value="{{ dr.end_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="back" value="/reports?{{ fq }}"><button class="ghost small">Re-group this window with AI</button></form>{% endif %}</p>
   {% set cats = w.themes|map(attribute=0)|list %}
   <table><thead><tr><th>Site</th>{% for c in cats %}<th class="num">{{ c }}</th>{% endfor %}<th class="num">Total</th></tr></thead><tbody>
   {% for s in w.sites if s.negative_30d %}<tr><td>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}?{{ dr.query() }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>{% for c in cats %}<td class="num">{{ w.theme_matrix.get(s.name, {}).get(c, '') }}</td>{% endfor %}<td class="num"><strong>{{ s.negative_30d }}</strong></td></tr>{% endfor %}

@@ -169,9 +169,9 @@ def main():
         users = {u.name.split()[0]: u for u in s.execute(select(User)).scalars().all()}
         admin = users["Mitch"]
         if not s.execute(select(ReportRecipient)).first():
-            s.add(ReportRecipient(email="owner@example.test", name="Owner"))
-            s.add(ReportRecipient(email="il-ops@example.test", name="IL Ops", brands="WashU"))
-            s.add(ReportRecipient(email="tn-ops@example.test", name="TN Ops", brands="ICON;WA"))
+            s.add(ReportRecipient(email="owner@example.test", name="Owner", edition="all"))
+            s.add(ReportRecipient(email="il-ops@example.test", name="IL Ops", edition="il", brands="WashU"))
+            s.add(ReportRecipient(email="tn-ops@example.test", name="TN Ops", edition="tn", brands="ICON;WA"))
         if not s.execute(select(ReplyTemplate)).first():
             for name, brand, lo, hi, tags, body, order in TEMPLATES:
                 s.add(ReplyTemplate(name=name, brand=brand, min_rating=lo, max_rating=hi, tags=tags, body=body, sort_order=order,

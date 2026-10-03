@@ -212,7 +212,8 @@ class ReportRecipient(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(200), unique=True)
     name: Mapped[Optional[str]] = mapped_column(String(120))
-    brands: Mapped[Optional[str]] = mapped_column(String(120))
+    brands: Mapped[Optional[str]] = mapped_column(String(120))      # legacy; edition is what the digest uses now
+    edition: Mapped[str] = mapped_column(String(10), default="all")  # il / tn / all
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     def brand_list(self) -> List[str]:
