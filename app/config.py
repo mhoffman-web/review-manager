@@ -68,6 +68,9 @@ class Settings:
     session_hours: int = int(os.getenv("SESSION_HOURS", "12"))
     # Password login: this many failed attempts per email or address within 15 minutes locks it for 15 minutes.
     login_max_attempts: int = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+    # How many proxies sit in front of the app and append to X-Forwarded-For. Render runs one;
+    # 0 = use the socket address and ignore the header entirely.
+    trusted_proxy_hops: int = int(os.getenv("TRUSTED_PROXY_HOPS") or ("1" if os.getenv("RENDER") else "0"))
     # Facebook Page recommendations (second source). A system-user token with pages_read_user_content,
     # pages_read_engagement and pages_manage_engagement on every brand page.
     facebook_access_token: Optional[str] = os.getenv("FACEBOOK_ACCESS_TOKEN") or None

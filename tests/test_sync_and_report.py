@@ -408,3 +408,51 @@ def test_empty_site_scope_matches_nothing(db):
     assert window_report(s, dr, location_ids=None).count == 2
     assert rating_distribution(s, dr, location_ids=[])["rows"] == []
     assert _scope(s, [empty.id], [link.location_id]) == []
+
+
+def test_morning_report_is_tracked_per_edition(db, monkeypatch):
+    """A failed edition is retried while the others are done; a manual --to send does not count;
+    an outage that spans midnight sends the missed day late, once."""
+    from datetime import date
+    from app import mailer, reports
+    from app.models import ReportRecipient, ReportSend
+    s, link = db
+    s.add_all([ReportRecipient(email="il@x.com", edition="il"), ReportRecipient(email="tn@x.com", edition="tn")]); s.commit()
+    today = date(2026, 10, 5)
+    failing = {"il@x.com"}
+    sent = []
+
+    def fake_send(to, subject, html, text):
+        if set(to) & failing:
+            raise RuntimeError("smtp 451")
+        sent.append((tuple(to), subject))
+    monkeypatch.setattr(mailer, "send_email", fake_send)
+
+    assert sorted(reports.pending_editions(s, today)) == ["il", "tn"]
+    reports.send_morning_report(s, editions=reports.pending_editions(s, today), report_date=today)
+    assert reports.pending_editions(s, today) == ["il"]                 # TN done, IL waits for a retry
+    failing.clear()
+    reports.send_morning_report(s, editions=reports.pending_editions(s, today), report_date=today)
+    assert reports.pending_editions(s, today) == [] and len(sent) == 2
+    assert all("Sun Oct 4" in subj for _, subj in sent)                 # the report covers the day before
+
+    # a manual send to someone else on the next day does not mark that day done
+    tomorrow = date(2026, 10, 6)
+    reports.send_morning_report(s, to_override=["me@x.com"], edition="il", report_date=tomorrow)
+    assert sorted(reports.pending_editions(s, tomorrow)) == ["il", "tn"]
+
+    # retries stop after REPORT_MAX_ATTEMPTS errors for that edition
+    failing.add("tn@x.com")
+    for _ in range(reports.REPORT_MAX_ATTEMPTS):
+        reports.send_morning_report(s, editions=["tn"], report_date=tomorrow)
+    assert reports.pending_editions(s, tomorrow) == ["il"]
+    failing.clear()
+
+    # outage: nothing at all on Oct 6 -> on Oct 7 the missed day is detected once
+    s.query(ReportSend).filter(ReportSend.report_date == tomorrow.isoformat()).delete(); s.commit()
+    assert reports.missed_report_date(s, date(2026, 10, 7)) == tomorrow
+    reports.send_morning_report(s, report_date=tomorrow)
+    assert reports.missed_report_date(s, date(2026, 10, 7)) is None
+    # a brand-new install never sends a backlog
+    s.query(ReportSend).delete(); s.commit()
+    assert reports.missed_report_date(s, date(2026, 10, 7)) is None

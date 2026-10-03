@@ -19,33 +19,87 @@ SESSION_MAX_AGE = max(1, settings.session_hours) * 3600   # idle timeout; the co
 RENEW_AFTER = 3600                                        # re-issue at most hourly
 _serializer = URLSafeTimedSerializer(settings.secret_key, salt="review-manager-session")
 
-# ---- login throttling (per email and per client address, in-process)
+# ---- login throttling
+# Buckets, each counted over a 15-minute window:
+#   "ep:<email>|<ip>"  the tight limit (LOGIN_MAX_ATTEMPTS): one person mistyping, or one
+#                      machine guessing one account;
+#   "ip:<ip>"          4x: one machine spraying many accounts;
+#   "e:<email>"        4x: many machines guessing one account. Higher than the pair limit so
+#                      a stranger's few bad guesses do not lock the real user out.
+# The client address comes from client_ip(), which trusts only the proxy hops we know about,
+# so rotating a client-supplied X-Forwarded-For does not reset the buckets. Counters live in
+# this process (the web service runs a single worker) and are pruned as they expire.
 import time as _time
-from collections import defaultdict as _dd
 LOGIN_WINDOW = 15 * 60
-_failures: "dict[str, list[float]]" = _dd(list)
+_MAX_KEYS = 20000
+_failures: "dict[str, list[float]]" = {}
+_last_prune = 0.0
+
+
+def client_ip(request: Request) -> str:
+    """The caller's address. With TRUSTED_PROXY_HOPS=n, the n-th address from the right of
+    X-Forwarded-For (the one our own proxy appended); anything left of it is client-supplied."""
+    hops = settings.trusted_proxy_hops
+    if hops > 0:
+        chain = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+        if len(chain) >= hops:
+            return chain[-hops]
+    return request.client.host if request.client else "?"
+
+
+def _limit(key: str) -> int:
+    base = max(1, settings.login_max_attempts)
+    return base * 4 if key.startswith(("ip:", "e:")) else base
+
+
+def _prune(now: float) -> None:
+    global _last_prune
+    if now - _last_prune < 60 and len(_failures) < _MAX_KEYS:
+        return
+    _last_prune = now
+    for k in [k for k, v in _failures.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
+        del _failures[k]
+    if len(_failures) >= _MAX_KEYS:            # a flood of distinct keys: keep the most recent half
+        keep = sorted(_failures.items(), key=lambda kv: kv[1][-1], reverse=True)[: _MAX_KEYS // 2]
+        _failures.clear()
+        _failures.update(keep)
+
+
+def login_keys(email: str, ip: str) -> tuple:
+    email = (email or "").strip().lower()
+    return (f"ep:{email}|{ip}", f"ip:{ip}", f"e:{email}")
 
 
 def login_blocked(*keys: str) -> int:
     """Seconds until another attempt is allowed, 0 when not blocked."""
     now = _time.time()
+    _prune(now)
     worst = 0
     for k in keys:
         stamps = [t for t in _failures.get(k, []) if now - t < LOGIN_WINDOW]
-        _failures[k] = stamps
-        if len(stamps) >= settings.login_max_attempts:
-            worst = max(worst, int(LOGIN_WINDOW - (now - stamps[0])) + 1)
+        if stamps:
+            _failures[k] = stamps
+        else:
+            _failures.pop(k, None)
+        if len(stamps) >= _limit(k):
+            worst = max(worst, int(LOGIN_WINDOW - (now - stamps[-_limit(k)])) + 1)
     return worst
 
 
 def note_login_failure(*keys: str) -> None:
+    now = _time.time()
+    _prune(now)
     for k in keys:
-        _failures[k].append(_time.time())
+        _failures.setdefault(k, []).append(now)
 
 
-def clear_login_failures(*keys: str) -> None:
+def clear_login_failures(*keys: str, include_account: bool = False) -> None:
+    """After a successful sign-in. The per-account bucket is left alone (unless the person
+    just proved ownership through a reset link) so a correct guess does not reset the count
+    of a distributed attack on that account."""
     for k in keys:
-        _failures.pop(k, None)
+        if include_account or not k.startswith("e:"):
+            _failures.pop(k, None)
 
 
 def hash_password(password: str) -> str:

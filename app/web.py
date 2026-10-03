@@ -291,7 +291,7 @@ def microsoft_callback(request: Request, db: Session = Depends(get_db)):
 @app.post("/login")
 def login(request: Request, email: str = Form(...), password: str = Form(...), next: str = Form("/"),
           db: Session = Depends(get_db)):
-    keys = (f"e:{email.strip().lower()}", f"ip:{request.client.host if request.client else '?'}")
+    keys = auth.login_keys(email, auth.client_ip(request))
     wait = auth.login_blocked(*keys)
     if wait:
         return _render(request, "login.html", None, next=next, error=f"Too many attempts. Try again in {max(1, wait // 60)} min.",
@@ -323,10 +323,10 @@ def forgot_submit(request: Request, email: str = Form(...), db: Session = Depend
     account exists; shows the link on screen when email is not configured (dev / demo)."""
     from .account_mail import send_reset
     email = email.strip().lower()
-    key = f"reset:{email}"
-    if auth.login_blocked(key):
+    keys = (f"reset:{email}", f"ip:{auth.client_ip(request)}")
+    if auth.login_blocked(*keys):
         return _render(request, "login_forgot.html", None, sent=False, email=email, link="", error="Too many requests. Try again in a few minutes.")
-    auth.note_login_failure(key)
+    auth.note_login_failure(*keys)
     link = ""
     if settings.password_login_enabled:
         u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
@@ -357,7 +357,7 @@ def reset_submit(request: Request, token: str = Form(...), password: str = Form(
     target.password_hash = auth.hash_password(password)
     target.last_login_at = datetime.utcnow()
     db.commit()
-    auth.clear_login_failures(f"e:{target.email}", f"reset:{target.email}")
+    auth.clear_login_failures(f"e:{target.email}", f"reset:{target.email}", include_account=True)
     return _session_redirect(target, "/?msg=Password+saved.+You+are+signed+in.")
 
 
@@ -972,11 +972,28 @@ def _export_filters(db, brand, location_id, group_id, rating, range, start, end)
     return brands_f, _scope(db, grp_f, loc_f), rat_f, dr
 
 
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(v):
+    """Neutralise spreadsheet formulas in reviewer-supplied text (CSV injection).
+
+    Excel and Sheets evaluate a CSV cell that starts with = + - @ (or a tab/CR before one);
+    a leading apostrophe makes it plain text. Real numbers are left alone."""
+    if isinstance(v, str) and v.startswith(_FORMULA_START):
+        try:
+            float(v)
+            return v
+        except ValueError:
+            return "'" + v
+    return v
+
+
 def _csv_response(name: str, header: List[str], rows: List[List]) -> RawResponse:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(header)
-    w.writerows(rows)
+    w.writerows([[_csv_safe(v) for v in row] for row in rows])
     return RawResponse(buf.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
@@ -994,6 +1011,10 @@ def _xlsx_response(name: str, sheets: List) -> RawResponse:
             c.font = Font(bold=True)
         for row in rows:
             ws.append(row)
+            # openpyxl turns any string starting with "=" into a live formula; keep text as text.
+            for cell in ws[ws.max_row]:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
         ws.freeze_panes = "A2"
         for i, h in enumerate(header, start=1):
             width = max(len(str(h)), *(min(60, len(str(r[i - 1]))) for r in rows[:500])) if rows else len(str(h))

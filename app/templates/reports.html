@@ -50,9 +50,9 @@
   {% set cats = w.themes|map(attribute=0)|list %}
   <table><thead><tr><th>Site</th>{% for c in cats %}<th class="num">{{ c }}</th>{% endfor %}<th class="num">Total</th></tr></thead><tbody>
   {% for s in w.sites if s.negative_30d %}<tr><td>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}?{{ dr.query() }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>{% for c in cats %}<td class="num">{{ w.theme_matrix.get(s.name, {}).get(c, '') }}</td>{% endfor %}<td class="num"><strong>{{ s.negative_30d }}</strong></td></tr>{% endfor %}
-  <tr style="font-weight:700"><td>All sites</td>{% for c, n in w.themes %}<td class="num">{{ n }}</td>{% endfor %}<td class="num">{{ w.negatives }}</td></tr>
+  
   {% if not w.themes %}<tr><td colspan="2" class="muted">No negative reviews in this window.</td></tr>{% endif %}
-  </tbody></table></div>
+  </tbody><tfoot><tr class="total-row" style="font-weight:700"><td>All sites</td>{% for c, n in w.themes %}<td class="num">{{ n }}</td>{% endfor %}<td class="num">{{ w.negatives }}</td></tr></tfoot></table></div>
 
 <div class="grid side">
   <div class="card table-scroll"><h3>By site</h3>

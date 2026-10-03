@@ -254,6 +254,16 @@ localhost, or `DEMO_MODE` together with real Google/Facebook credentials, a
 Postgres database, or (on a public host) no `DEMO_PASSWORD`. The error names
 the setting to fix.
 
+**Production on Render needs paid plans.** The worker is a background
+service, which the free plan does not offer, and a free web service sleeps
+after 15 idle minutes (which also stops any sync started from the web
+process). `render.production.yaml` is a ready Blueprint for the real
+deployment: a starter web service, a starter worker and a small Postgres
+sharing one generated `SECRET_KEY`. Create it with **New → Blueprint** and
+set the Blueprint path to `render.production.yaml`; Render then asks for the
+secrets marked `sync: false` (APP_BASE_URL, GOOGLE_TOKEN_JSON, SMTP, Microsoft,
+Anthropic). The free `render.yaml` stays the demo only.
+
 Quota note: the v4 reviews endpoint allows hundreds of requests per minute
 once access is approved. 23 listings polled every 20 minutes is about 1% of
 that, so polling is fine and Pub/Sub notifications are not needed.
@@ -342,6 +352,9 @@ generated `DEMO_PASSWORD`, which you read from the service's Environment tab.
 3. When the deploy finishes, open the URL Render shows. Sign in with
    `admin@example.test` and the `DEMO_PASSWORD` value from the Environment tab.
 
+This demo is not a production setup: it has no worker, so nothing syncs or
+emails on a schedule. See section 4 for `render.production.yaml`.
+
 Free-plan caveats: the service sleeps after 15 minutes idle (first visit after
 that takes up to a minute) and the SQLite demo data resets on every deploy or
 restart. No Google token, SMTP, Microsoft, or Anthropic keys are set, so
@@ -401,6 +414,18 @@ the current password hash, so a used or superseded link stops working.
 ## 11. Sessions and login
 
 Sessions expire after `SESSION_HOURS` (default 12) without activity and are
-renewed while the app is in use. Password login locks an email or address for
-15 minutes after `LOGIN_MAX_ATTEMPTS` failures; set `PASSWORD_LOGIN_ENABLED=false`
-once Microsoft sign-in is proven.
+renewed while the app is in use. Password login is throttled over a 15-minute
+window: `LOGIN_MAX_ATTEMPTS` (default 5) failures for one email from one address,
+four times that from one address across all emails, and four times that for one
+email across all addresses. So a stranger's few bad guesses do not lock the real
+user out, and a successful reset link clears the count. The client address is the
+one the hosting proxy appended to `X-Forwarded-For`; `TRUSTED_PROXY_HOPS` says how
+many proxies to trust (default 1 on Render, 0 elsewhere), so a spoofed header
+cannot reset the count. Set `PASSWORD_LOGIN_ENABLED=false` once Microsoft sign-in
+is proven.
+
+The morning report is tracked per edition and per day. A failed edition is
+retried on each worker tick (up to 6 tries) while the others stay sent, a
+`send-report --to` test send never counts as the day's report, and if the
+worker was down from report time until after midnight, the missed day's report
+goes out late the next morning, once.

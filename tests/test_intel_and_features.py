@@ -366,3 +366,24 @@ def test_search_values_survive_paging_and_post_and_next(db, monkeypatch):
     loc_hdr = r.headers["location"]
     assert loc_hdr.startswith(f"/reviews/{a.id}?")
     assert parse_qs(parse_qs(urlsplit(loc_hdr).query)["ctx"][0])["q"] == ["A&W #1 50% +"]
+
+
+def test_exports_never_contain_live_formulas(db):
+    import io
+    from fastapi.testclient import TestClient
+    from openpyxl import load_workbook
+    from app.web import app
+    s, loc, link = db
+    mk(s, link, "f1", 1, '=HYPERLINK("http://evil.example","click")', author="=cmd|' /C calc'!A0", days_ago=1)
+    mk(s, link, "f2", 2, "-2+3 bad wash", author="@SUM(1)", days_ago=1)
+    s.commit()
+    c = TestClient(app)
+    c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026"})
+    body = c.get("/export/reviews.csv?view=all").text
+    assert "'=HYPERLINK" in body and "'=cmd" in body and "'@SUM(1)" in body and "'-2+3 bad wash" in body
+    assert ',=' not in body and '"=' not in body
+    wb = load_workbook(io.BytesIO(c.get("/export/reviews.xlsx?view=all").content))
+    cells = [cell for row in wb.active.iter_rows() for cell in row]
+    hyper = [cl for cl in cells if isinstance(cl.value, str) and cl.value.startswith("=HYPERLINK")]
+    assert hyper and all(cl.data_type == "s" for cl in hyper)
+    assert not any(cl.data_type == "f" for cl in cells)

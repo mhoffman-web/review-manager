@@ -189,7 +189,7 @@ details.inline-form summary { list-style:none; display:inline-block; } details.i
 .ms-btn { display:flex; gap:10px; align-items:center; justify-content:center; width:100%; height:44px; padding:0 14px; border-radius:var(--radius-md); border:1px solid var(--secondary-border); background:transparent; color:var(--ink); font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:var(--tracking-label); text-decoration:none; transition:all var(--duration-fast) var(--ease-out); }
 .ms-btn:hover { background:var(--icon-cyan-08); border-color:var(--icon-cyan); text-decoration:none; color:var(--ink); }
 .or { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.14em; margin:16px 0 8px; } .or:before, .or:after { content:""; flex:1; border-top:1px solid var(--line); }
-@media (max-width:760px) { main { padding:12px; } nav.top { padding:0 12px; gap:0; } nav.top .meta, nav.top .brand .wordmark { display:none; } nav.top a.item { padding:0 8px; font-size:11px; } .snippet { max-width:none; }
+@media (max-width:760px) { main { padding:12px; } nav.top { padding:0 12px; } nav.top .meta { display:none; } nav.top a.item { padding:0 10px; font-size:11px; } .snippet { max-width:none; }
   table.inbox th:nth-child(4), table.inbox td:nth-child(4), table.inbox th:nth-child(5), table.inbox td:nth-child(5) { display:none; } table.inbox td, table.inbox th { padding:8px 6px; } .tiles { grid-template-columns:repeat(2,1fr); } }
 
 /* ---- inbox reply column */
@@ -312,4 +312,21 @@ table.weekly td:nth-child(9), table.weekly th:nth-child(9):not(.grp) { border-le
   .grid.two, .grid.side, .grid.three, .grid.four { grid-template-columns:1fr 1fr; } .chart-wrap { height:220px; }
   a { color:inherit; text-decoration:none; } a[href]::after { content:""; }
   body { font-size:12px; } h1 { font-size:20px; }
+}
+
+/* ---- nav layout: one row on wide screens; below 1100px the brand and controls stay on
+   the first row and the section links move to a second, horizontally scrollable row,
+   so nothing (Sign out included) is ever pushed off-screen. */
+nav.top .nav-items { display:flex; gap:2px; align-items:center; min-width:0; }
+@media (max-width:1100px) {
+  nav.top { flex-wrap:wrap; height:auto; row-gap:0; padding-top:0; }
+  nav.top .brand { height:52px; }
+  nav.top .nav-items { order:3; flex:1 0 100%; overflow-x:auto; scrollbar-width:none; margin:0 -12px; padding:0 12px; border-top:1px solid var(--icon-gray-mid); }
+  nav.top .nav-items::-webkit-scrollbar { display:none; }
+  nav.top a.item { height:44px; flex:0 0 auto; white-space:nowrap; }
+}
+@media (max-width:760px) { nav.top .keys-help { display:none; } nav.top .brand { margin-right:8px; } }
+@media (max-width:420px) {
+  .mark { font-size:13px; } .mark::before { width:14px; margin-right:6px; }
+  nav.top button, nav.top .theme-toggle { padding:0 9px; } nav.top .theme-toggle { margin-right:6px; }
 }

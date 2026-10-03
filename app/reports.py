@@ -5,7 +5,7 @@ import logging
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set
 from zoneinfo import ZoneInfo
@@ -779,26 +779,43 @@ def recipient_groups(session: Session) -> Dict[str, List[str]]:
     return groups
 
 
+REPORT_MAX_ATTEMPTS = 6   # per edition per report date; the worker retries each tick until then
+
+
+def _local_today() -> date:
+    return datetime.now(ZoneInfo(settings.timezone)).date()
+
+
 def send_morning_report(session: Session, dry_run: bool = False, to_override: Optional[List[str]] = None,
-                        out_file: Optional[str] = None, edition: Optional[str] = None) -> List[ReportSend]:
-    """Yesterday's reviews, one email per edition (Illinois, Tennessee, Corporate)."""
+                        out_file: Optional[str] = None, edition: Optional[str] = None,
+                        editions: Optional[List[str]] = None, report_date: Optional[date] = None) -> List[ReportSend]:
+    """The previous day's reviews, one email per edition (Illinois, Tennessee, Corporate).
+
+    `report_date` is the local date the report is for (it covers the day before; default
+    today). `editions` limits which editions go out (the worker passes only those still
+    pending). A send to `to_override` addresses is recorded as "manual" and never counts
+    as the day's report, so it cannot stop the real one."""
     from .mailer import send_email
 
-    tz = ZoneInfo(settings.timezone)
-    today = datetime.now(tz).strftime("%Y-%m-%d")
+    report_date = report_date or _local_today()
+    covered = report_date - timedelta(days=1)
+    dr = resolve_range("custom", covered.isoformat(), covered.isoformat())
     groups = {edition or "all": to_override} if to_override else recipient_groups(session)
+    if editions is not None:
+        groups = {k: v for k, v in groups.items() if k in editions}
     sends: List[ReportSend] = []
     if not groups:
         log.warning("no report recipients configured; nothing sent")
         return sends
     for ed, emails in groups.items():
-        d = build_digest(session, ed)
+        d = build_digest(session, ed, dr)
         html, text, subject = render_digest_html(d), render_digest_text(d), digest_subject(d)
         if out_file:
             p = Path(out_file)
             p.with_name(f"{p.stem}.{ed}{p.suffix}").write_text(html)
             log.info("wrote %s", p.with_name(f"{p.stem}.{ed}{p.suffix}"))
-        send = ReportSend(report_date=today, brands=ed, recipients=", ".join(emails))
+        send = ReportSend(report_date=report_date.isoformat(), brands=ed, recipients=", ".join(emails),
+                          status="manual" if to_override else "ok")
         if dry_run:
             send.status = "dry-run"
             print(f"--- {subject}\n--- to: {', '.join(emails)}\n{text}\n")
@@ -815,11 +832,45 @@ def send_morning_report(session: Session, dry_run: bool = False, to_override: Op
     return sends
 
 
+def pending_editions(session: Session, report_date: Optional[date] = None) -> List[str]:
+    """Editions with recipients whose report for `report_date` has not gone out yet and has
+    not used up its retries. Keyed on date + edition: a failed Illinois send is retried
+    even though Tennessee went out, and manual sends do not count."""
+    key = (report_date or _local_today()).isoformat()
+    rows = session.execute(select(ReportSend.brands, ReportSend.status).where(ReportSend.report_date == key)).all()
+    done = {ed for ed, st in rows if st == "ok"}
+    attempts: Dict[str, int] = {}
+    for ed, st in rows:
+        if st == "error":
+            attempts[ed] = attempts.get(ed, 0) + 1
+    out = []
+    for ed in recipient_groups(session):
+        if ed in done:
+            continue
+        if attempts.get(ed, 0) >= REPORT_MAX_ATTEMPTS:
+            continue
+        out.append(ed)
+    return out
+
+
+def missed_report_date(session: Session, today: Optional[date] = None) -> Optional[date]:
+    """Yesterday's date if the worker was down from report time until after midnight, so
+    yesterday's report never went out at all. Only once reports have been flowing (a
+    successful send on an earlier day), so a fresh install does not send a backlog."""
+    today = today or _local_today()
+    yesterday = today - timedelta(days=1)
+    sent_yesterday = session.execute(select(ReportSend.id).where(
+        ReportSend.report_date == yesterday.isoformat(), ReportSend.status.in_(("ok", "error")))).first()
+    if sent_yesterday:
+        return None
+    earlier = session.execute(select(ReportSend.id).where(
+        ReportSend.report_date < yesterday.isoformat(), ReportSend.status == "ok")).first()
+    return yesterday if earlier else None
+
+
 def already_sent_today(session: Session) -> bool:
-    tz = ZoneInfo(settings.timezone)
-    today = datetime.now(tz).strftime("%Y-%m-%d")
-    row = session.execute(select(ReportSend).where(ReportSend.report_date == today, ReportSend.status == "ok")).first()
-    return row is not None
+    """True when every edition's report for today is out (or out of retries)."""
+    return not pending_editions(session)
 
 
 # ----------------------------------------------------------------------------- monthly summary (fixed 12 months, for the table)

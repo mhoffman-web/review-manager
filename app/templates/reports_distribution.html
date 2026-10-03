@@ -19,9 +19,9 @@
 <tr class="clickable" onclick="location.href='/sites/{{ r.location_id }}?{{ dr.query() }}'"><td data-sort="{{ r.name }}">{% if r.location_id %}<a class="site-link" href="/sites/{{ r.location_id }}?{{ dr.query() }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
 {% for c in r.counts %}<td class="num star-cell" {% if loop.index <= 3 and c %}style="color:var(--critical)"{% endif %}>{{ c or '' }}</td>{% endfor %}
 <td class="num"><strong>{{ r.total }}</strong></td><td class="num">{{ r.avg or '–' }}</td><td class="num" {% if r.neg_pct > 8 %}style="color:var(--critical)"{% endif %}>{{ r.neg_pct }}%</td><td class="num muted" data-sort="{{ r.listing_avg or '' }}">{% if r.listing_avg %}{{ r.listing_avg }} <span class="small">({{ r.listing_total }})</span>{% else %}–{% endif %}</td></tr>{% endfor %}
-<tr style="font-weight:700"><td>All selected sites</td>{% for c in dist.totals %}<td class="num">{{ c }}</td>{% endfor %}<td class="num">{{ dist.total }}</td><td class="num">{{ dist.avg or '–' }}</td><td class="num">{{ (dist.pct[0] + dist.pct[1] + dist.pct[2])|round(1) }}%</td><td></td></tr>
+
 {% if not dist.rows %}<tr><td colspan="10" class="muted" style="padding:24px;text-align:center">No reviews in this window for the selected sites.</td></tr>{% endif %}
-</tbody></table></div>
+</tbody><tfoot><tr class="total-row" style="font-weight:700"><td>All selected sites</td>{% for c in dist.totals %}<td class="num">{{ c }}</td>{% endfor %}<td class="num">{{ dist.total }}</td><td class="num">{{ dist.avg or '–' }}</td><td class="num">{{ (dist.pct[0] + dist.pct[1] + dist.pct[2])|round(1) }}%</td><td></td></tr></tfoot></table></div>
 {% if disputed %}<p class="muted small">{{ disputed }} review{{ '' if disputed==1 else 's' }} reported to Google and awaiting a decision {{ 'is' if disputed==1 else 'are' }} left out.</p>{% endif %}
 {% endblock %}
 {% block scripts %}{{ chart_script() }}

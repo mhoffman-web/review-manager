@@ -130,3 +130,46 @@ def test_unsafe_deployments_refuse_to_start(monkeypatch, tmp_path):
     monkeypatch.setattr(st, "facebook_access_token", None)
     monkeypatch.setattr(st, "database_url", "postgresql+psycopg://u@h/db")
     assert any("non-SQLite" in p for p in st.fatal_config_problems())
+
+
+def test_login_throttle_resists_spoofing_and_lockout(monkeypatch):
+    from starlette.requests import Request
+    from app import auth
+    from app.config import settings as st
+    monkeypatch.setattr(auth, "_failures", {})
+    monkeypatch.setattr(st, "login_max_attempts", 5)
+
+    def req(xff=None, peer="10.0.0.9"):
+        headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+        return Request({"type": "http", "headers": headers, "client": (peer, 1234)})
+
+    # behind one trusted proxy, only the address the proxy appended counts
+    monkeypatch.setattr(st, "trusted_proxy_hops", 1)
+    assert auth.client_ip(req("1.2.3.4, 203.0.113.7")) == "203.0.113.7"
+    assert auth.client_ip(req("spoofed-1, 203.0.113.7")) == auth.client_ip(req("spoofed-2, 203.0.113.7"))
+    monkeypatch.setattr(st, "trusted_proxy_hops", 0)
+    assert auth.client_ip(req("1.2.3.4")) == "10.0.0.9"
+
+    # one attacker machine: blocked after 5 guesses at an account, whatever header it sends
+    attacker = auth.login_keys("lily@x.com", "203.0.113.7")
+    for _ in range(5):
+        auth.note_login_failure(*attacker)
+    assert auth.login_blocked(*attacker) > 0
+    # the real user on another address is NOT locked out by those 5
+    assert auth.login_blocked(*auth.login_keys("Lily@x.com", "198.51.100.2")) == 0
+    # a distributed attack on the account still hits the per-account cap (4x)
+    for i in range(15):
+        auth.note_login_failure(*auth.login_keys("lily@x.com", f"192.0.2.{i}"))
+    assert auth.login_blocked(*auth.login_keys("lily@x.com", "198.51.100.2")) > 0
+    # a correct guess does not wipe the per-account count; a reset link does
+    auth.clear_login_failures(*auth.login_keys("lily@x.com", "192.0.2.1"))
+    assert auth.login_blocked(*auth.login_keys("lily@x.com", "198.51.100.2")) > 0
+    auth.clear_login_failures("e:lily@x.com", include_account=True)
+    assert auth.login_blocked(*auth.login_keys("lily@x.com", "198.51.100.2")) == 0
+
+    # expired entries are pruned
+    monkeypatch.setattr(auth, "_last_prune", 0.0)
+    old = auth._time.time() - auth.LOGIN_WINDOW - 5
+    auth._failures["ep:stale|x"] = [old]
+    auth._prune(auth._time.time())
+    assert "ep:stale|x" not in auth._failures

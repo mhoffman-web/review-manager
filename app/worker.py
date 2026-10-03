@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from .config import settings
 from .db import session_scope
 from .models import SyncRun
-from .reports import already_sent_today, send_morning_report
+from .reports import missed_report_date, pending_editions, send_morning_report
 from .sync import sync_all
 
 log = logging.getLogger(__name__)
@@ -37,9 +37,14 @@ def tick() -> None:
         log.info("sync tick (%s): %s", "full" if full else "incremental", totals)
     if now_local.hour >= settings.report_hour_local:
         with session_scope() as s:
-            if not already_sent_today(s):
-                log.info("sending morning report")
-                send_morning_report(s)
+            missed = missed_report_date(s, now_local.date())
+            if missed:
+                log.warning("the report for %s never went out (worker down past midnight); sending it late", missed)
+                send_morning_report(s, report_date=missed)
+            todo = pending_editions(s, now_local.date())
+            if todo:
+                log.info("sending morning report: %s", ", ".join(todo))
+                send_morning_report(s, editions=todo, report_date=now_local.date())
 
 
 def run_forever() -> None:

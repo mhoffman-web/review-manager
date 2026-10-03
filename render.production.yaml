@@ -1,0 +1,83 @@
+# Render Blueprint for the REAL deployment (not the free demo in render.yaml).
+# Render only reads render.yaml automatically; to use this one, choose
+# New -> Blueprint, pick this repo and set the Blueprint path to render.production.yaml.
+#
+# Why paid plans: the worker (sync every 20 min, daily full pull, morning report,
+# instant alerts) is a background service, which Render's free plan does not offer,
+# and a free web service sleeps after 15 idle minutes. Free Postgres expires after
+# 30 days. Starter plans for all three cost roughly $7 + $7 + $7 per month (check
+# Render's pricing page; prices change).
+databases:
+  - name: review-manager-db
+    plan: basic-256mb
+    region: ohio
+    postgresMajorVersion: "16"
+
+envVarGroups:
+  - name: review-manager-shared
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: TIMEZONE
+        value: America/Chicago
+      - key: SECRET_KEY
+        generateValue: true
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: LISTING_EXCLUDE_PATTERNS
+        value: "wash n' roll,wash n roll"
+      # Fill these in the dashboard (sync: false = Render asks for the value, never stores it in git)
+      - key: APP_BASE_URL
+        sync: false
+      - key: GOOGLE_TOKEN_JSON
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TENANT_ID
+        sync: false
+      - key: SSO_ALLOWED_TENANTS
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+services:
+  - type: web
+    name: review-manager
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - fromGroup: review-manager-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: review-manager-db
+          property: connectionString
+
+  - type: worker
+    name: review-manager-worker
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: python cli.py init-db && python cli.py worker
+    autoDeploy: true
+    envVars:
+      - fromGroup: review-manager-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: review-manager-db
+          property: connectionString
