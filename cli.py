@@ -59,7 +59,20 @@ def cmd_seed_locations(a):
 
 
 def cmd_create_user(a):
-    from app.auth import hash_password
+    from app.auth import hash_password, password_link
+    if a.invite:
+        from app.account_mail import send_welcome
+        with session_scope() as s:
+            u = s.execute(select(User).where(User.email == a.email.lower())).scalar_one_or_none()
+            if u is None:
+                u = User(email=a.email.lower(), name=a.name, password_hash=None)
+                s.add(u)
+            u.name, u.role = a.name, "admin" if a.admin else "agent"
+            s.flush()
+            link = password_link(u, "welcome")
+            sent = send_welcome(u, link, by="the Review Manager admin")
+        print(f"{'welcome email sent to ' + a.email if sent else 'email not configured; send them this link:'}\n{'' if sent else link}")
+        return
     pw = a.password or getpass.getpass("Password: ")
     if len(pw) < 10:
         sys.exit("use at least 10 characters")
@@ -200,7 +213,7 @@ def main():
     sub.add_parser("init-db").set_defaults(fn=cmd_init_db)
     sp = sub.add_parser("seed-locations"); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_seed_locations)
     sp = sub.add_parser("create-user"); sp.add_argument("--email", required=True); sp.add_argument("--name", required=True)
-    sp.add_argument("--admin", action="store_true"); sp.add_argument("--password", help="omit to be prompted"); sp.set_defaults(fn=cmd_create_user)
+    sp.add_argument("--admin", action="store_true"); sp.add_argument("--password", help="omit to be prompted"); sp.add_argument("--invite", action="store_true", help="no password: email (or print) a set-password link instead"); sp.set_defaults(fn=cmd_create_user)
     sub.add_parser("google-auth").set_defaults(fn=cmd_google_auth)
     sub.add_parser("discover-locations").set_defaults(fn=cmd_discover_locations)
     sub.add_parser("discover-facebook").set_defaults(fn=cmd_discover_facebook)

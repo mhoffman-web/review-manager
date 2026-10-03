@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Review Manager</title></head>
+<body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2328;font-size:15px;line-height:1.5">
+<div style="max-width:560px;margin:0 auto;padding:24px">
+  <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#009ace">Review Manager</p>
+  {% if kind == 'welcome' %}
+  <h2 style="margin:0 0 10px">Your account is ready</h2>
+  <p>Hi {{ user.name.split()[0] if user.name else 'there' }}, {{ by or 'an administrator' }} set up a Review Manager account for <strong>{{ user.email }}</strong>{% if user.role == 'admin' %} with admin access{% endif %}. It is where the team reads and answers Google reviews for every location.</p>
+  <p style="margin:18px 0"><a href="{{ link }}" style="display:inline-block;background:#009ace;color:#fff;text-decoration:none;font-weight:700;padding:11px 18px;border-radius:8px">Set your password</a></p>
+  <p style="color:#6b7280;font-size:13px">The link works for 48 hours and only once. After that, use “Forgot password?” on the sign-in page.</p>
+  {% if sso %}<p style="color:#6b7280;font-size:13px">Have a {{ domains|join(', ') }} Microsoft account? You can skip the password and use <a href="{{ settings.app_base_url }}/login" style="color:#1d4ed8">Sign in with Microsoft</a>.</p>{% endif %}
+  {% else %}
+  <h2 style="margin:0 0 10px">Reset your password</h2>
+  <p>Someone asked to reset the password for <strong>{{ user.email }}</strong>. If that was you, choose a new one here:</p>
+  <p style="margin:18px 0"><a href="{{ link }}" style="display:inline-block;background:#009ace;color:#fff;text-decoration:none;font-weight:700;padding:11px 18px;border-radius:8px">Choose a new password</a></p>
+  <p style="color:#6b7280;font-size:13px">The link works for 2 hours and only once. If you did not ask for this, ignore this email; nothing changes.</p>
+  {% endif %}
+  <p style="color:#9ca3af;font-size:12px;margin-top:24px">If the button does not work, paste this into your browser:<br><span style="word-break:break-all">{{ link }}</span></p>
+</div></body></html>

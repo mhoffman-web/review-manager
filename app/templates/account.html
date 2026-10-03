@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block title %}Your account{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Your account</h1></div>
+<div class="grid side">
+<div>
+  <div class="card"><h3>Profile</h3>
+    <dl class="kv"><dt>Name</dt><dd>{{ user.name }}</dd><dt>Email</dt><dd>{{ user.email }}</dd><dt>Role</dt><dd>{{ 'Admin' if user.is_admin else 'Agent' }}</dd>
+      <dt>Sign-in</dt><dd>{% if user.ms_oid %}Microsoft work account{% if user.password_hash %} · password also set{% endif %}{% elif user.password_hash %}Email and password{% else %}Microsoft (no password set){% endif %}</dd>
+      <dt>Last sign-in</dt><dd>{{ user.last_login_at|local if user.last_login_at else '—' }}</dd></dl>
+    <p class="muted small" style="margin:10px 0 0">Name and role are changed by an admin under Admin → Users.</p></div>
+</div>
+<div>
+  <div class="card"><h3>{{ 'Change password' if user.password_hash else 'Set a password' }}</h3>
+    {% if not password_enabled %}<p class="muted small" style="margin:0">Password sign-in is turned off on this server; use Sign in with Microsoft.</p>
+    {% else %}
+    {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+    <form method="post" action="/account/password">
+      {% if user.password_hash %}<p><input type="password" name="current" placeholder="Current password" required style="width:100%" aria-label="Current password" autocomplete="current-password"></p>{% endif %}
+      <p><input type="password" name="password" placeholder="New password (10+ characters)" required minlength="10" style="width:100%" aria-label="New password" autocomplete="new-password"></p>
+      <p><input type="password" name="confirm" placeholder="Repeat new password" required minlength="10" style="width:100%" aria-label="Repeat new password" autocomplete="new-password"></p>
+      <p><button class="primary small">Save password</button></p></form>
+    <p class="muted small" style="margin:6px 0 0">Forgot it? Sign out and use “Forgot password?” on the sign-in page; a link is emailed to you.</p>
+    {% endif %}</div>
+</div>
+</div>
+{% endblock %}

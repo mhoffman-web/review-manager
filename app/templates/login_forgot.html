@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block title %}Forgot password{% endblock %}
+{% block content %}
+<div class="card login">
+<div class="mark big">Review<em>Manager</em></div>
+<p class="sub">Forgot password</p>
+{% if sent %}<div class="msg ok">If <strong>{{ email }}</strong> has an account, a reset link is on its way. It works for 2 hours.{% if link %}<div class="small" style="margin-top:8px">Email is not configured on this server, so here is the link:<br><a href="{{ link }}" style="word-break:break-all">{{ link }}</a></div>{% endif %}</div>
+{% else %}
+{% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+<p class="muted small">Enter your work email and we will send a link to choose a new password.</p>
+<form method="post" action="/login/forgot"><p><input type="email" name="email" placeholder="Email" required autofocus style="width:100%" aria-label="Email"></p>
+<p><button class="primary" style="width:100%">Email me a reset link</button></p></form>
+{% endif %}
+<p class="small" style="text-align:center;margin:12px 0 0"><a href="/login">Back to sign in</a></p>
+</div>
+{% endblock %}

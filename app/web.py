@@ -285,6 +285,75 @@ def logout():
     return resp
 
 
+@app.get("/login/forgot", response_class=HTMLResponse)
+def forgot_form(request: Request):
+    return _render(request, "login_forgot.html", None, sent=False, email="", link="", error="")
+
+
+@app.post("/login/forgot", response_class=HTMLResponse)
+def forgot_submit(request: Request, email: str = Form(...), db: Session = Depends(get_db)):
+    """Always answers the same way so addresses cannot be probed. Sends a 2-hour link when the
+    account exists; shows the link on screen when email is not configured (dev / demo)."""
+    from .account_mail import send_reset
+    email = email.strip().lower()
+    key = f"reset:{email}"
+    if auth.login_blocked(key):
+        return _render(request, "login_forgot.html", None, sent=False, email=email, link="", error="Too many requests. Try again in a few minutes.")
+    auth.note_login_failure(key)
+    link = ""
+    if settings.password_login_enabled:
+        u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        if u and u.active:
+            link = auth.password_link(u, "reset")
+            if send_reset(u, link):
+                link = ""
+            elif settings.mail_enabled:
+                link = ""      # sending failed; never show a live link when mail was supposed to work
+    return _render(request, "login_forgot.html", None, sent=True, email=email, link=link, error="")
+
+
+@app.get("/password/reset", response_class=HTMLResponse)
+def reset_form(request: Request, token: str = "", db: Session = Depends(get_db)):
+    target = auth.verify_password_token(db, token)
+    purpose = "welcome" if (target and not target.password_hash) else "reset"
+    return _render(request, "set_password.html", None, target=target, token=token, purpose=purpose, error="")
+
+
+@app.post("/password/reset")
+def reset_submit(request: Request, token: str = Form(...), password: str = Form(...), confirm: str = Form(""), db: Session = Depends(get_db)):
+    target = auth.verify_password_token(db, token)
+    if not target:
+        return _render(request, "set_password.html", None, target=None, token=token, purpose="reset", error="")
+    problem = auth.password_problem(password, confirm)
+    if problem:
+        return _render(request, "set_password.html", None, target=target, token=token, purpose="welcome" if not target.password_hash else "reset", error=problem)
+    target.password_hash = auth.hash_password(password)
+    target.last_login_at = datetime.utcnow()
+    db.commit()
+    auth.clear_login_failures(f"e:{target.email}", f"reset:{target.email}")
+    return _session_redirect(target, "/?msg=Password+saved.+You+are+signed+in.")
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), error: str = ""):
+    return _render(request, "account.html", user, db, error=error, password_enabled=settings.password_login_enabled)
+
+
+@app.post("/account/password")
+def change_password(user: User = Depends(auth.current_user), db: Session = Depends(get_db), current: str = Form(""),
+                    password: str = Form(...), confirm: str = Form("")):
+    if not settings.password_login_enabled:
+        return RedirectResponse(url="/account?error=Password+sign-in+is+turned+off", status_code=303)
+    if user.password_hash and not auth.verify_password(current, user.password_hash):
+        return RedirectResponse(url=f"/account?{urlencode({'error': 'The current password is wrong.'})}", status_code=303)
+    problem = auth.password_problem(password, confirm)
+    if problem:
+        return RedirectResponse(url=f"/account?{urlencode({'error': problem})}", status_code=303)
+    user.password_hash = auth.hash_password(password)
+    db.commit()
+    return RedirectResponse(url="/account?msg=Password+saved", status_code=303)
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)):
     h = _sync_health(db)
@@ -1048,33 +1117,58 @@ def delete_template(tid: int, user: User = Depends(auth.admin_user), db: Session
 
 # ----------------------------------------------------------------- admin: users / recipients / groups / employees / ai
 @app.get("/admin/users", response_class=HTMLResponse)
-def admin_users(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), msg: str = ""):
+def admin_users(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), msg: str = "", link: str = ""):
     users = db.execute(select(User).order_by(User.name)).scalars().all()
-    return _render(request, "admin_users.html", user, db, users=users, msg=msg, sso_enabled=settings.sso_enabled,
-                   domains=settings.sso_allowed_domains)
+    return _render(request, "admin_users.html", user, db, users=users, msg=msg, link=link if link.startswith(settings.app_base_url) else "",
+                   sso_enabled=settings.sso_enabled, domains=settings.sso_allowed_domains, mail_enabled=settings.mail_enabled)
 
 
 @app.post("/admin/users")
 def save_user(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
               name: str = Form(...), password: str = Form(""), role: str = Form("agent")):
+    """Create or update a user. A new user gets a welcome email with a set-password link; when
+    email is not configured the link is shown to the admin to pass on."""
+    from .account_mail import send_welcome
     email = email.strip().lower()
+    role = role if role in ("agent", "admin") else "agent"
     u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if u is None:
-        if not password and settings.sso_enabled and auth.email_domain_allowed(email):
-            u = User(email=email, name=name.strip(), password_hash=None, role=role, auth_provider="microsoft")
-        elif len(password) < 10:
-            return RedirectResponse(url="/admin/users?msg=Password+must+be+at+least+10+characters+(or+leave+blank+for+a+Microsoft-only+account)", status_code=303)
-        else:
-            u = User(email=email, name=name.strip(), password_hash=auth.hash_password(password), role=role)
+        if password and auth.password_problem(password):
+            return RedirectResponse(url=f"/admin/users?{urlencode({'msg': auth.password_problem(password)})}", status_code=303)
+        sso_only = not password and settings.sso_enabled and auth.email_domain_allowed(email)
+        u = User(email=email, name=name.strip(), password_hash=auth.hash_password(password) if password else None, role=role,
+                 auth_provider="microsoft" if sso_only else "local")
         db.add(u)
-    else:
-        u.name, u.role = name.strip(), role
-        if password:
-            if len(password) < 10:
-                return RedirectResponse(url="/admin/users?msg=Password+must+be+at+least+10+characters", status_code=303)
-            u.password_hash = auth.hash_password(password)
+        db.commit()
+        link = auth.password_link(u, "welcome")
+        if send_welcome(u, link, by=user.name):
+            q = {"msg": f"Welcome email sent to {u.email} with a link to set their password."}
+        else:
+            q = {"msg": f"{u.name} added.", "link": link}
+        return RedirectResponse(url=f"/admin/users?{urlencode(q)}", status_code=303)
+    u.name, u.role = name.strip(), role
+    if password:
+        problem = auth.password_problem(password)
+        if problem:
+            return RedirectResponse(url=f"/admin/users?{urlencode({'msg': problem})}", status_code=303)
+        u.password_hash = auth.hash_password(password)
     db.commit()
     return RedirectResponse(url="/admin/users?msg=Saved", status_code=303)
+
+
+@app.post("/admin/users/{uid}/reset-link")
+def admin_reset_link(uid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+    """Email (or show) a set-password link for a user who is locked out or new."""
+    from .account_mail import send_reset
+    u = db.get(User, uid)
+    if not u or not u.active:
+        return RedirectResponse(url="/admin/users?msg=User+not+found", status_code=303)
+    link = auth.password_link(u, "welcome" if not u.password_hash else "reset")
+    if send_reset(u, link):
+        q = {"msg": f"Reset link emailed to {u.email}."}
+    else:
+        q = {"msg": f"Reset link for {u.email}:", "link": link}
+    return RedirectResponse(url=f"/admin/users?{urlencode(q)}", status_code=303)
 
 
 @app.post("/admin/users/{uid}/toggle")

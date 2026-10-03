@@ -194,3 +194,49 @@ def finish_microsoft_flow(flow_cookie: Optional[str], query_params: dict) -> dic
     if not claims:
         raise SsoError("Microsoft did not return an identity token.")
     return claims
+
+
+# ----------------------------------------------------------------- password set / reset links
+_pw_serializer = URLSafeTimedSerializer(settings.secret_key, salt="review-manager-password")
+WELCOME_MAX_AGE = 48 * 3600     # a new account's set-password link
+RESET_MAX_AGE = 2 * 3600        # a forgot-password link
+MIN_PASSWORD = 10
+
+
+def _hash_tag(user: User) -> str:
+    return (user.password_hash or "none")[-16:]
+
+
+def make_password_token(user: User, purpose: str = "reset") -> str:
+    """Signed, time-limited and single-use: it carries a fragment of the current hash, so it
+    stops working the moment the password changes."""
+    return _pw_serializer.dumps({"uid": user.id, "tag": _hash_tag(user), "p": "welcome" if purpose == "welcome" else "reset"})
+
+
+def password_link(user: User, purpose: str = "reset") -> str:
+    return f"{settings.app_base_url}/password/reset?token={make_password_token(user, purpose)}"
+
+
+def verify_password_token(db: Session, token: Optional[str]):
+    """The user the token belongs to, or None when it is missing, forged, expired or already used."""
+    if not token:
+        return None
+    try:
+        data, issued = _pw_serializer.loads(token, max_age=WELCOME_MAX_AGE, return_timestamp=True)
+    except BadSignature:
+        return None
+    age = (datetime.now(issued.tzinfo) - issued).total_seconds()
+    if data.get("p") != "welcome" and age > RESET_MAX_AGE:
+        return None
+    user = db.get(User, data.get("uid"))
+    if not (user and user.active and data.get("tag") == _hash_tag(user)):
+        return None
+    return user
+
+
+def password_problem(password: str, confirm: Optional[str] = None) -> Optional[str]:
+    if len(password or "") < MIN_PASSWORD:
+        return f"Use at least {MIN_PASSWORD} characters."
+    if confirm is not None and password != confirm:
+        return "The two passwords do not match."
+    return None

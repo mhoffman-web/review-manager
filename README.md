@@ -361,7 +361,19 @@ Browser calls are allowed from the origins in `API_CORS_ORIGINS` (default
 re-create to rotate. Errors come back as JSON with `status` 401 (no key) or 403
 (revoked/unknown).
 
-## 10. Sessions and login
+## 10. Accounts, passwords and sign-in
+
+Admin → Users creates an account. The new person gets a **welcome email** with a
+link to set their own password (valid 48 hours, works once); when SMTP is not
+configured the link is shown to the admin to pass on instead. Every user can
+change their password at **/account** (their name in the top bar), and the
+sign-in page has **Forgot password?**, which emails a 2-hour link; the answer is
+the same whether or not the address exists. Admins can also send a reset link
+from the Users table. Links are signed with `SECRET_KEY` and carry a fragment of
+the current password hash, so a used or superseded link stops working.
+`python cli.py create-user --email … --name … --invite` does the same from the CLI.
+
+## 11. Sessions and login
 
 Sessions expire after `SESSION_HOURS` (default 12) without activity and are
 renewed while the app is in use. Password login locks an email or address for

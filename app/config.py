@@ -85,6 +85,11 @@ class Settings:
     def ai_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
 
+    @property
+    def mail_enabled(self) -> bool:
+        """Outbound email works once SMTP credentials exist; without them links are shown on screen instead."""
+        return bool(self.smtp_user and self.smtp_password)
+
     # Microsoft Entra ID single sign-on (OpenID Connect via MSAL).
     ms_client_id: Optional[str] = os.getenv("MS_CLIENT_ID") or None
     ms_client_secret: Optional[str] = os.getenv("MS_CLIENT_SECRET") or None

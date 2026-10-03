@@ -16,6 +16,7 @@
 <p><input type="email" name="email" placeholder="Email" required {% if not sso_enabled %}autofocus{% endif %} style="width:100%"></p>
 <p><input type="password" name="password" placeholder="Password" required style="width:100%"></p>
 <p><button class="{% if sso_enabled %}ghost{% else %}primary{% endif %}" style="width:100%">Sign in with password</button></p></form>
+<p class="small" style="text-align:center;margin:4px 0 0"><a href="/login/forgot">Forgot password?</a></p>
 {% elif not sso_enabled %}<p class="muted">No sign-in method is configured. Set MS_CLIENT_ID and MS_CLIENT_SECRET, or PASSWORD_LOGIN_ENABLED=true.</p>{% endif %}
 </div>
 {% endblock %}

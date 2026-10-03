@@ -21,7 +21,7 @@
   <span class="spacer"></span>
   <a class="meta sync {% if nav.sync and (nav.sync.stale or nav.sync.failing) %}bad{% endif %}" href="/locations" title="{% if nav.sync and nav.sync.last_sync %}Last sync {{ nav.sync.last_sync|local }}{% if nav.sync.next_in_min is not none %} · next in about {{ nav.sync.next_in_min }} min{% endif %}{% if nav.sync.failing %} · {{ nav.sync.failing }} listing(s) failing{% endif %}{% else %}No sync has run yet{% endif %}">
     {% if nav.sync and nav.sync.last_sync %}{% if nav.sync.failing %}<span class="sync-dot fail"></span>{{ nav.sync.failing }} failing · {% elif nav.sync.stale %}<span class="sync-dot stale"></span>Sync overdue · {% else %}<span class="sync-dot ok"></span>{% endif %}Synced {{ nav.sync.last_sync|age }} ago{% else %}<span class="sync-dot stale"></span>Not synced yet{% endif %}</a>
-  <span class="meta who">{{ user.name }}</span>
+  <a class="meta who" href="/account" title="Your account and password">{{ user.name }}</a>
   <button type="button" class="theme-toggle" id="themeToggle" title="Switch light / dark" aria-label="Switch light or dark theme">Theme</button>
   <button type="button" class="theme-toggle keys-help" data-keys-help title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
   <form method="post" action="/logout"><button>Sign out</button></form>

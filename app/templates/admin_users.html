@@ -1,19 +1,19 @@
 {% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('users') }}
-{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% if link %}<div class="msg ok"><strong>{{ msg }}</strong> Email is not configured on this server, so share this set-password link with them (valid 48 hours, works once):<div style="margin-top:6px"><code id="pwLink" style="font-size:12px;word-break:break-all;user-select:all">{{ link }}</code> <button type="button" class="ghost small" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('pwLink').textContent).then(function(){this.textContent='Copied'}.bind(this))">Copy</button></div></div>{% endif %}
 <div class="grid side">
 <div class="card table-scroll" style="padding:0"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Sign-in</th><th>Last login</th><th></th></tr></thead><tbody>
 {% for u in users %}<tr style="{% if not u.active %}opacity:.55{% endif %}"><td><strong>{{ u.name }}</strong></td><td>{{ u.email }}</td><td><span class="pill">{{ u.role }}</span></td>
 <td class="small">{% if u.ms_oid %}<span class="pill good">Microsoft</span>{% elif u.password_hash %}<span class="pill">password</span>{% else %}<span class="pill warn">Microsoft (not yet signed in)</span>{% endif %}</td>
 <td class="ink2" data-sort="{{ u.last_login_at.isoformat() if u.last_login_at else '' }}">{{ u.last_login_at|local or 'never' }}</td>
-<td>{% if u.id != user.id %}<form method="post" action="/admin/users/{{ u.id }}/toggle"><button class="ghost small">{% if u.active %}Deactivate{% else %}Reactivate{% endif %}</button></form>{% else %}<span class="muted small">you</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+<td style="white-space:nowrap">{% if u.active %}<form method="post" action="/admin/users/{{ u.id }}/reset-link" style="display:inline"><button class="ghost small" title="Email {{ u.email }} a link to set a new password">Send reset link</button></form> {% endif %}{% if u.id != user.id %}<form method="post" action="/admin/users/{{ u.id }}/toggle" style="display:inline"><button class="ghost small">{% if u.active %}Deactivate{% else %}Reactivate{% endif %}</button></form>{% else %}<span class="muted small">you</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
 <div class="card"><h3>Add or update a user</h3>
 <form method="post" action="/admin/users">
 <p><input type="text" name="name" placeholder="Name" required style="width:100%"></p>
 <p><input type="email" name="email" placeholder="Email" required style="width:100%"></p>
-<p><input type="password" name="password" placeholder="{% if sso_enabled %}Password (optional; leave blank for Microsoft-only){% else %}Password (10+ chars; blank keeps existing){% endif %}" style="width:100%"></p>
+<p><input type="password" name="password" placeholder="Password (optional: they get an email to set their own)" style="width:100%" aria-label="Password" autocomplete="new-password"></p>
 <p><select name="role" style="width:100%"><option value="agent">Agent (reply to reviews)</option><option value="admin">Admin (everything)</option></select></p>
 <p><button class="primary">Save user</button></p></form>
-<p class="muted small">Existing email = update name, role, and (if given) password.{% if sso_enabled %} Anyone with a {{ domains|join(', ') }} account can also just click "Sign in with Microsoft" and gets an agent account automatically; promote to admin here.{% endif %}</p></div>
+<p class="muted small">New users get a welcome email with a link to set their password{% if not mail_enabled %} (email is not configured here, so the link is shown to you instead){% endif %}. Existing email = update name, role, and (if given) password.{% if sso_enabled %} Anyone with a {{ domains|join(', ') }} account can also just click "Sign in with Microsoft" and gets an agent account automatically; promote to admin here.{% endif %}</p></div>
 </div>
 {% endblock %}
