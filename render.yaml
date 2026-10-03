@@ -18,6 +18,8 @@ services:
         value: 3.12.7
       - key: DEMO_MODE
         value: "true"
+      - key: DEMO_MONTHS
+        value: "9"
       - key: DATABASE_URL
         value: sqlite:////tmp/review_manager_demo.db
       - key: SECRET_KEY

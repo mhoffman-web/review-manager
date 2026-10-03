@@ -35,7 +35,7 @@ if "sqlite" not in settings.database_url and not os.getenv("DEMO_MODE"):
     sys.exit("refusing to seed a non-sqlite database")
 
 RESET = "--reset" in sys.argv
-MONTHS = 18
+MONTHS = int(os.getenv("DEMO_MONTHS", "18"))
 NOW = datetime.utcnow()
 
 import os
