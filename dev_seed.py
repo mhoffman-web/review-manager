@@ -14,6 +14,7 @@ Re-run with --reset to wipe and regenerate.
 import csv
 import json
 import math
+import os
 import random
 import sys
 from datetime import datetime, timedelta
@@ -38,7 +39,6 @@ RESET = "--reset" in sys.argv
 MONTHS = int(os.getenv("DEMO_MONTHS", "18"))
 NOW = datetime.utcnow()
 
-import os
 # Hosted demo: set DEMO_PASSWORD in the environment so the public demo does not use the passwords printed above.
 _PW = os.getenv("DEMO_PASSWORD")
 DEMO_USERS = [("lily@example.test", "Lily Collins", _PW or "dev-password-lily-2026", "agent"),
