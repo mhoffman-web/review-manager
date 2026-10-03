@@ -1,6 +1,9 @@
 {% extends "base.html" %}{% block title %}Sign in{% endblock %}
 {% block content %}
-<div class="card login"><h1>Review<span style="color:var(--accent)">Manager</span></h1>
+<script>(function(){var t=document.documentElement.getAttribute("data-theme");var light=t==="light"||(!t&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches);if(light){document.addEventListener("DOMContentLoaded",function(){var i=document.getElementById("loginLogo");if(i)i.src="/static/img/icon-logo-primary.png";});}})();</script>
+<div class="card login">
+<img class="logo" src="/static/img/icon-logo-reverse.png" alt="ICON Car Wash" id="loginLogo">
+<p class="sub">Review Manager</p>
 {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
 {% if sso_enabled %}
 <a class="ms-btn" href="/auth/microsoft?next={{ next }}">

@@ -1,13 +1,15 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Review Manager{% endblock %}</title>
+<script>(function(){try{var t=localStorage.getItem('rm-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/img/icon-logo-reverse.png">
 {% block head %}{% endblock %}</head>
 <body>
 {% if user %}
 {% set path = request.url.path %}
 <nav class="top">
-  <a class="brand" href="/">Review<span>Manager</span></a>
+  <a class="brand" href="/" aria-label="Review Manager home"><img src="/static/img/icon-logo-reverse.png" alt="ICON Car Wash"><span class="wordmark">Review Manager</span></a>
   <a class="item {% if path=='/' or path.startswith('/reviews') %}active{% endif %}" href="/">Inbox {% if nav.attention %}<span class="count">{{ nav.attention }}</span>{% endif %}</a>
   <a class="item {% if path=='/reports' or path.startswith('/sites') %}active{% endif %}" href="/reports">Reports</a>
   <a class="item {% if path.startswith('/reports/employees') %}active{% endif %}" href="/reports/employees">Team</a>
@@ -16,10 +18,14 @@
   {% if user.is_admin %}<a class="item {% if path.startswith('/admin') and not path.startswith('/admin/templates') %}active{% endif %}" href="/admin/users">Admin</a>{% endif %}
   <span class="spacer"></span>
   <span class="meta">{% if nav.last_sync %}Synced {{ nav.last_sync|age }} ago{% else %}Not synced yet{% endif %} · {{ user.name }}</span>
+  <button type="button" class="theme-toggle" id="themeToggle" title="Switch light / dark">Theme</button>
   <form method="post" action="/logout"><button>Sign out</button></form>
 </nav>
 {% endif %}
 <main>{% block content %}{% endblock %}</main>
 <script src="/static/sort.js"></script>
+<script>(function(){var b=document.getElementById('themeToggle');if(!b)return;function cur(){var t=document.documentElement.getAttribute('data-theme');if(t)return t;return window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
+function label(){b.textContent=cur()==='dark'?'Light mode':'Dark mode';}
+b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('rm-theme',n);}catch(e){}label();window.dispatchEvent(new Event('rm-theme-change'));});label();})();</script>
 {% block scripts %}{% endblock %}
 </body></html>
