@@ -28,6 +28,7 @@ from app.ai import DEFAULT_RULES  # noqa: E402
 from app.auth import hash_password  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import engine, init_db, session_scope  # noqa: E402
+from app.events import record  # noqa: E402
 from app.models import (AiRule, Base, Employee, Location, ReplyTemplate, ReportRecipient, Response, Review,  # noqa: E402
                         ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
 from app.text_intel import apply_intel, build_roster  # noqa: E402
@@ -172,6 +173,7 @@ def main():
             s.add(ReportRecipient(email="owner@example.test", name="Owner", edition="all"))
             s.add(ReportRecipient(email="il-ops@example.test", name="IL Ops", edition="il", brands="WashU"))
             s.add(ReportRecipient(email="tn-ops@example.test", name="TN Ops", edition="tn", brands="ICON;WA"))
+            s.add(ReportRecipient(email="lily@example.test", name="Lily Collins", edition="alerts"))
         if not s.execute(select(ReplyTemplate)).first():
             for name, brand, lo, hi, tags, body, order in TEMPLATES:
                 s.add(ReplyTemplate(name=name, brand=brand, min_rating=lo, max_rating=hi, tags=tags, body=body, sort_order=order,
@@ -213,6 +215,8 @@ def main():
         roster = build_roster(s)
         emps = {e.name: e.id for e in s.execute(select(Employee)).scalars().all()}
         n = 0
+        tpl_rows = s.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True))).scalars().all()
+        recent_rows = []
         for loc in locs:
             link = s.execute(select(ReviewSourceLink).where(ReviewSourceLink.source == "google",
                              ReviewSourceLink.external_location_id == f"demo-{loc.id}")).scalar_one_or_none()
@@ -302,7 +306,7 @@ def main():
                         assigned = random.choice([users["Lily"], users["Sarah"]])
                     r = Review(source_link_id=link.id, source="google", external_id=f"demo-{loc.id}-{k}", author_name=author,
                                author_is_anonymous=anon, rating=rating, text=text, created_at_source=created, updated_at_source=created if random.random() > 0.03 else created + timedelta(days=random.randint(1, 20)),
-                               has_owner_reply=replied, owner_reply_text=reply_text, owner_reply_updated_at=reply_at,
+                               has_owner_reply=replied, owner_reply_text=reply_text, owner_reply_updated_at=reply_at, first_replied_at=reply_at,
                                category=(theme if text else "No Content") if is_neg else None, raw_json="{}",
                                first_seen_at=created, last_seen_at=NOW,
                                assigned_to_id=assigned.id if assigned else None, assigned_at=NOW - timedelta(hours=random.random() * 6) if assigned else None)
@@ -312,12 +316,50 @@ def main():
                     # record who replied (for the responder report) on recent replies
                     if replied and age_h < 24 * 45:
                         who = users["Lily"] if random.random() < 0.65 else users["Sarah"]
+                        tpl = random.choice(tpl_rows) if (tpl_rows and random.random() < 0.6) else None
+                        ai = tpl is None and random.random() < 0.3
                         s.add(Response(review_id=r.id, text=reply_text, status="posted", created_by_id=who.id, created_at=reply_at, posted_at=reply_at,
-                                       template_id=None, ai_generated=random.random() < 0.15))
+                                       template_id=tpl.id if tpl else None, ai_generated=ai))
+                        record(s, r, "reply_posted", actor_id=who.id, at=reply_at, text=reply_text, template=bool(tpl), ai=ai)
+                        if random.random() < 0.06:   # an edit a little later
+                            edit_at = reply_at + timedelta(hours=random.uniform(1, 30))
+                            if edit_at < NOW:
+                                r.owner_reply_updated_at = edit_at
+                                record(s, r, "reply_edited", actor_id=who.id, at=edit_at, text=reply_text)
+                    recent_rows.append(r)
                     ratings_all.append(rating)
                     k += 1
                     n += 1
                 day += timedelta(days=1)
+            # Demo texture: a few rating changes (both ways), a couple of reviews that vanished, one reported review.
+            recent = [x for x in recent_rows if (NOW - x.created_at_source).days < 60 and x.rating]
+            random.shuffle(recent)
+            for x in recent[:2]:
+                if x.rating <= 2 and x.has_owner_reply and x.first_replied_at:
+                    new_rating = random.choice([4, 5]); at = x.first_replied_at + timedelta(days=random.uniform(1, 6))
+                elif x.rating >= 4:
+                    new_rating = random.choice([1, 2]); at = x.created_at_source + timedelta(days=random.uniform(2, 20))
+                else:
+                    continue
+                if at >= NOW:
+                    continue
+                record(s, x, "rating_changed", at=at, **{"from": x.rating, "to": new_rating})
+                x.prev_rating, x.rating, x.rating_changed_at, x.updated_at_source = x.rating, new_rating, at, at
+                if new_rating <= 3 and not x.category:
+                    x.category, x.category_source = "Unknown", "keyword"
+            if random.random() < 0.35 and len(recent) > 4:
+                gone = recent[3]
+                gone.is_deleted, gone.removed_at = True, NOW - timedelta(days=random.uniform(0.2, 12))
+                record(s, gone, "removed", at=gone.removed_at, rating=gone.rating, text=(gone.text or "")[:500])
+                gone.removal_notified_at = gone.removed_at + timedelta(minutes=9)
+                record(s, gone, "alert_sent", at=gone.removal_notified_at, what="removed", to=1)
+            if loc.name in ("WashU Plainfield", "ICON Thompson Lane", "WashU Des Plaines") and len(recent) > 5:
+                bad = next((x for x in recent if x.rating == 1 and x.text), None)
+                if bad is not None:
+                    bad.report_status, bad.reported_at, bad.reported_by_id = "reported", NOW - timedelta(days=2), users["Mitch"].id
+                    bad.report_note = "Not a customer: no plate or visit on the day described"
+                    record(s, bad, "reported", actor_id=users["Mitch"].id, at=bad.reported_at, note=bad.report_note)
+            recent_rows.clear()
             prior_n = 0 if loc.name in NEW_ICON else random.randint(300, 1500)
             prior_avg = random.uniform(4.3, 4.8)
             tot = prior_n + len(ratings_all)

@@ -39,6 +39,23 @@ class Settings:
     google_token_json: Optional[str] = os.getenv("GOOGLE_TOKEN_JSON") or None
 
     sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "20"))
+    # One full re-pull per day (catches reviews that were removed) at or after this local hour.
+    full_sync_hour_local: int = int(os.getenv("FULL_SYNC_HOUR_LOCAL", "3"))
+    # Instant alerts (new negative reviews, removed reviews, sync failures) go to the "alerts" recipient list.
+    alert_negatives: bool = _bool(os.getenv("ALERT_NEGATIVES"), True)
+    alert_fail_threshold: int = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
+    # Reviews we have reported to Google and are awaiting a decision on are left out of averages.
+    exclude_disputed: bool = _bool(os.getenv("EXCLUDE_DISPUTED"), True)
+    # Signed-in sessions expire after this many hours without activity.
+    session_hours: int = int(os.getenv("SESSION_HOURS", "12"))
+    # Password login: this many failed attempts per email or address within 15 minutes locks it for 15 minutes.
+    login_max_attempts: int = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+    # Facebook Page recommendations (second source). A system-user token with pages_read_user_content,
+    # pages_read_engagement and pages_manage_engagement on every brand page.
+    facebook_access_token: Optional[str] = os.getenv("FACEBOOK_ACCESS_TOKEN") or None
+    # Browser origins allowed to call the read-only JSON API (the Teams Portal), comma-separated.
+    api_cors_origins: List[str] = field(default_factory=lambda: _csv(os.getenv("API_CORS_ORIGINS", "https://chris-stacks.washucarwash.com")))
+    facebook_api_version: str = os.getenv("FACEBOOK_API_VERSION", "v21.0")
     report_hour_local: int = int(os.getenv("REPORT_HOUR_LOCAL", "7"))
     report_recipients_fallback: List[str] = field(default_factory=lambda: _csv(os.getenv("REPORT_RECIPIENTS")))
 
@@ -111,3 +128,7 @@ EDITIONS = {
     "tn": {"label": "Tennessee", "short": "TN", "brands": ["ICON", "WA"]},
     "all": {"label": "All locations", "short": "Corporate", "brands": None},
 }
+# Every recipient list the admin page manages: the three digest editions plus instant alerts.
+ALERTS_KEY = "alerts"
+RECIPIENT_LISTS = dict(EDITIONS)
+RECIPIENT_LISTS[ALERTS_KEY] = {"label": "Instant alerts", "short": "Alerts", "brands": None}

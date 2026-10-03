@@ -6,7 +6,7 @@ Uses the official Anthropic SDK. The key comes from ANTHROPIC_API_KEY (or an
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from .config import settings
 from .models import AiRule, ReplyTemplate, Review
@@ -84,7 +84,7 @@ def draft_reply(review: Review, rules: Optional[Sequence[AiRule]] = None,
     return text.strip().strip('"')
 
 
-def classify_negative(review: Review, categories: Sequence[str]) -> str:
+def classify_negative(review: Review, categories: Sequence[str], examples: Optional[Sequence[Tuple[str, str]]] = None) -> str:
     """Ask Claude which workbook category a negative review belongs to. Returns one
     of `categories` exactly; raises AiUnavailable when the model cannot be used."""
     if not settings.ai_enabled:
@@ -102,6 +102,9 @@ def classify_negative(review: Review, categories: Sequence[str]) -> str:
               "POS = pay station, kiosk, card reader, receipts. LPR/Access Issues = plate reader, gate, membership not recognised. "
               "Customer Service = staff behaviour, no response, management. Closure = closed, out of order, hours. "
               "Unknown = negative but none of the above fits.")
+    if examples:
+        system += "\n\nHow this team has filed similar reviews by hand (follow these conventions):\n" + "\n".join(
+            f'- "{(t or "")[:220]}" -> {c}' for t, c in list(examples)[:12])
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
         response = client.messages.create(model=settings.ai_model, max_tokens=20, system=system,

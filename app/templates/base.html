@@ -1,27 +1,40 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{% block title %}Review Manager{% endblock %}</title>
+<meta name="theme-color" content="#000000"><link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/img/app-icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/static/img/app-icon-180.png">
 <script>(function(){try{var t=localStorage.getItem('rm-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/static/style.css">
 {% block head %}{% endblock %}</head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 {% if user %}
 {% set path = request.url.path %}
-<nav class="top">
+<nav class="top" aria-label="Main">
   <a class="brand" href="/" aria-label="Review Manager home"><span class="mark">Review<em>Manager</em></span></a>
-  <a class="item {% if path=='/' or path.startswith('/reviews') %}active{% endif %}" href="/">Inbox {% if nav.attention %}<span class="count">{{ nav.attention }}</span>{% endif %}</a>
-  <a class="item {% if path=='/reports' or path.startswith('/sites') %}active{% endif %}" href="/reports">Reports</a>
+  <a class="item {% if path=='/' or path.startswith('/reviews') %}active{% endif %}" href="/">Inbox {% if nav.attention %}<span class="count" aria-label="{{ nav.attention }} need attention">{{ nav.attention }}</span>{% endif %}</a>
+  <a class="item {% if path.startswith('/reports') and not path.startswith('/reports/employees') or path.startswith('/sites') %}active{% endif %}" href="/reports">Reports</a>
   <a class="item {% if path.startswith('/reports/employees') %}active{% endif %}" href="/reports/employees">Team</a>
   <a class="item {% if path.startswith('/admin/templates') %}active{% endif %}" href="/admin/templates">Templates</a>
   <a class="item {% if path.startswith('/locations') %}active{% endif %}" href="/locations">Listings</a>
   {% if user.is_admin %}<a class="item {% if path.startswith('/admin') and not path.startswith('/admin/templates') %}active{% endif %}" href="/admin/users">Admin</a>{% endif %}
   <span class="spacer"></span>
-  <span class="meta">{% if nav.last_sync %}Synced {{ nav.last_sync|age }} ago{% else %}Not synced yet{% endif %} · {{ user.name }}</span>
-  <button type="button" class="theme-toggle" id="themeToggle" title="Switch light / dark">Theme</button>
+  <a class="meta sync {% if nav.sync and (nav.sync.stale or nav.sync.failing) %}bad{% endif %}" href="/locations" title="{% if nav.sync and nav.sync.last_sync %}Last sync {{ nav.sync.last_sync|local }}{% if nav.sync.next_in_min is not none %} · next in about {{ nav.sync.next_in_min }} min{% endif %}{% if nav.sync.failing %} · {{ nav.sync.failing }} listing(s) failing{% endif %}{% else %}No sync has run yet{% endif %}">
+    {% if nav.sync and nav.sync.last_sync %}{% if nav.sync.failing %}<span class="sync-dot fail"></span>{{ nav.sync.failing }} failing · {% elif nav.sync.stale %}<span class="sync-dot stale"></span>Sync overdue · {% else %}<span class="sync-dot ok"></span>{% endif %}Synced {{ nav.sync.last_sync|age }} ago{% else %}<span class="sync-dot stale"></span>Not synced yet{% endif %}</a>
+  <span class="meta who">{{ user.name }}</span>
+  <button type="button" class="theme-toggle" id="themeToggle" title="Switch light / dark" aria-label="Switch light or dark theme">Theme</button>
+  <button type="button" class="theme-toggle keys-help" data-keys-help title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
   <form method="post" action="/logout"><button>Sign out</button></form>
 </nav>
 {% endif %}
-<main>{% block content %}{% endblock %}</main>
+<main id="main" tabindex="-1">{% block content %}{% endblock %}</main>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden><span class="toast-msg"></span><button type="button" class="toast-undo" hidden>Undo</button><button type="button" class="toast-x" aria-label="Dismiss">&times;</button></div>
+<div id="keysHelp" class="keys-help-panel" hidden role="dialog" aria-label="Keyboard shortcuts">
+  <div class="card"><h3>Keyboard shortcuts</h3>
+    <dl class="kv keys"><dt>J / K</dt><dd>Next / previous review in the list</dd><dt>Enter or O</dt><dd>Open the selected review</dd><dt>R</dt><dd>Reply (inline in the inbox, focus the box on a review)</dd>
+      <dt>E</dt><dd>Archive the selected review (with Undo)</dd><dt>1–9</dt><dd>Insert the matching template</dd><dt>N / P</dt><dd>Next / previous in queue (review page)</dd>
+      <dt>/</dt><dd>Search</dd><dt>⌘↵</dt><dd>Post the reply</dd><dt>Esc</dt><dd>Close the composer or this panel</dd><dt>?</dt><dd>Show or hide this panel</dd></dl>
+    <button type="button" class="ghost small" data-keys-help>Close</button></div></div>
 <script src="/static/sort.js"></script>
 <script>(function(){document.querySelectorAll('details[data-ms]').forEach(function(d){var initial=null;d.addEventListener('toggle',function(){if(d.open){initial=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');}else{var now=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');if(initial!==null&&now!==initial){d.closest('form').requestSubmit();}}});
 d.querySelector('.ms-all').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=true;});});d.querySelector('.ms-none').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=false;});});});
@@ -30,5 +43,16 @@ document.addEventListener('click',function(e){document.querySelectorAll('details
 <script>(function(){var b=document.getElementById('themeToggle');if(!b)return;function cur(){var t=document.documentElement.getAttribute('data-theme');if(t)return t;return window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
 function label(){b.textContent=cur()==='dark'?'Light mode':'Dark mode';}
 b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('rm-theme',n);}catch(e){}label();window.dispatchEvent(new Event('rm-theme-change'));});label();})();</script>
+<script>
+// Toast notices: ?msg=...&undo=/path from a redirect, or RM.toast(msg, {undo:url}) from scripts. Undo posts to the url, then reloads.
+window.RMtoast=(function(){var el=document.getElementById('toast'),msgEl=el.querySelector('.toast-msg'),undoBtn=el.querySelector('.toast-undo'),timer=null,undoUrl=null;
+function hide(){el.hidden=true;clearTimeout(timer);}
+function show(msg,opts){opts=opts||{};msgEl.textContent=msg;undoUrl=opts.undo||null;undoBtn.hidden=!undoUrl;el.classList.toggle('err',!!opts.error);el.hidden=false;clearTimeout(timer);timer=setTimeout(hide,undoUrl?9000:5000);}
+undoBtn.addEventListener('click',function(){if(!undoUrl)return;undoBtn.disabled=true;fetch(undoUrl,{method:'POST',headers:{'Accept':'application/json'}}).then(function(){location.reload();}).catch(function(){location.reload();});});
+el.querySelector('.toast-x').addEventListener('click',hide);
+try{var p=new URLSearchParams(location.search);var m=p.get('msg');if(m){show(m,{undo:p.get('undo'),error:/fail|error|could not/i.test(m)});p.delete('msg');p.delete('undo');var qs=p.toString();history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash);}}catch(e){}
+return {show:show,hide:hide};})();
+</script>
+<script src="/static/keys.js"></script>
 {% block scripts %}{% endblock %}
 </body></html>

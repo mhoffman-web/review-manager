@@ -1,0 +1,46 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('sites') }}
+<div class="grid side">
+<div>
+  <div class="card table-scroll" style="padding:0">
+  <table><thead><tr><th>Site</th><th>Brand</th><th>Where</th><th>Listings</th><th>Snowflake ids</th><th></th></tr></thead><tbody>
+  {% for l in locs %}<tr style="{% if not l.active %}opacity:.55{% endif %}"><td><a class="site-link" href="/sites/{{ l.id }}">{{ l.name }}</a>{% if not l.active %} <span class="pill small">inactive</span>{% endif %}</td><td><span class="dot {{ l.brand }}"></span>{{ l.brand }}</td><td class="ink2">{{ l.city or '' }}{% if l.city %}, {% endif %}{{ l.state }}</td>
+    <td>{% for s in l.sources %}<span class="pill small {% if s.active and s.last_sync_status=='ok' %}good{% elif s.active and s.last_sync_status=='error' %}bad{% endif %}" title="{{ s.display_name }} · {{ s.external_location_id }}">{{ s.source }}{% if not s.active %} · off{% endif %}</span> {% else %}<span class="muted small">none yet</span>{% endfor %}</td>
+    <td class="muted small">{{ l.snowflake_location_ids or '–' }}</td>
+    <td style="white-space:nowrap"><a class="small" href="/admin/sites?edit={{ l.id }}">Edit</a> · <form method="post" action="/admin/sites/{{ l.id }}/toggle" style="display:inline"><button class="ghost small">{{ 'Deactivate' if l.active else 'Activate' }}</button></form></td></tr>
+  {% else %}<tr><td colspan="6" class="muted" style="padding:24px;text-align:center">No sites yet. Add the first one on the right.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="card"><h3>Unmapped listings</h3>
+    {% if unmapped %}<p class="muted small">Found on the platform but not tied to a site. Legacy Wash N' Roll profiles are listed here on purpose and must stay unmapped.</p>
+    <table><thead><tr><th>Source</th><th>Listing</th><th>Map to site</th></tr></thead><tbody>
+    {% for s in unmapped %}<tr><td>{{ s.source|capitalize }}</td><td>{{ s.display_name }}<div class="muted small">{{ s.address or s.external_location_id }}</div></td>
+      <td><form method="post" action="/locations/{{ s.id }}/link" style="display:flex;gap:6px"><select name="location_id" aria-label="Site"><option value="0">— leave unmapped —</option>{% for loc in locs if loc.active %}<option value="{{ loc.id }}">{{ loc.name }}</option>{% endfor %}</select><button class="ghost small">Map</button></form></td></tr>{% endfor %}</tbody></table>
+    {% else %}<p class="muted small" style="margin:0">Every listing we know about is mapped to a site.</p>{% endif %}</div>
+</div>
+<div>
+  <div class="card"><h3>{{ 'Edit site' if editing else 'Add a site' }}</h3>
+    <form method="post" action="/admin/sites"><input type="hidden" name="id" value="{{ editing.id if editing else 0 }}">
+      <label class="small muted" for="sname">Name as it should appear in the app</label><input id="sname" type="text" name="name" value="{{ editing.name if editing else '' }}" placeholder="e.g. ICON Murfreesboro" required style="width:100%;margin:4px 0 8px">
+      <div style="display:grid;grid-template-columns:1fr 90px;gap:8px"><div><label class="small muted" for="sbrand">Brand</label><input id="sbrand" type="text" name="brand" list="brandList" value="{{ editing.brand if editing else '' }}" placeholder="WashU / ICON / WA" required style="width:100%;margin-top:4px"><datalist id="brandList">{% for b in brands %}<option value="{{ b }}">{% endfor %}</datalist></div>
+        <div><label class="small muted" for="sstate">State</label><input id="sstate" type="text" name="state" value="{{ editing.state if editing else '' }}" placeholder="TN" maxlength="2" required style="width:100%;margin-top:4px"></div></div>
+      <label class="small muted" for="scity" style="display:block;margin-top:8px">City</label><input id="scity" type="text" name="city" value="{{ editing.city or '' if editing else '' }}" style="width:100%;margin-top:4px">
+      <label class="small muted" for="ssf" style="display:block;margin-top:8px">Snowflake location ids (optional, ; separated)</label><input id="ssf" type="text" name="snowflake_location_ids" value="{{ editing.snowflake_location_ids or '' if editing else '' }}" style="width:100%;margin-top:4px">
+      <p style="margin:10px 0"><label class="inline small"><input type="checkbox" name="active" value="1" {% if not editing or editing.active %}checked{% endif %}> active (synced and shown in filters)</label></p>
+      <button class="primary small">{{ 'Save' if editing else 'Add site' }}</button>{% if editing %} <a class="small" href="/admin/sites">Cancel</a>{% endif %}</form></div>
+  <div class="card"><h3>Find its Google Business Profile</h3>
+    <p class="muted small">Pulls every listing the connected Google account manages and maps the ones whose name matches a site. New profiles appear under Unmapped if the name does not match; map them there.</p>
+    <form method="post" action="/admin/sites/discover" style="display:flex;gap:8px;flex-wrap:wrap"><input type="hidden" name="source" value="google"><button class="ghost small">Discover Google listings</button></form>
+    {% if facebook_ready %}<form method="post" action="/admin/sites/discover" style="display:flex;gap:8px;margin-top:6px"><input type="hidden" name="source" value="facebook"><button class="ghost small">Discover Facebook pages</button></form>{% else %}<p class="muted small" style="margin:6px 0 0">Facebook: set FACEBOOK_ACCESS_TOKEN to enable.</p>{% endif %}
+    <p class="muted small" style="margin:8px 0 0">Listings whose title contains {{ excluded_patterns|map('upper')|join(' / ') }} are recorded but never mapped or synced.</p></div>
+  <div class="card"><h3>Add a listing by id</h3>
+    <p class="muted small">For a profile discovery cannot see. The Google location id is the number after <code>locations/</code> in the Business Profile URL.</p>
+    <form method="post" action="/admin/sites/listing">
+      <select name="source" aria-label="Source" style="width:100%"><option value="google">Google Business Profile</option><option value="facebook">Facebook page</option></select>
+      <input type="text" name="external_location_id" placeholder="Location id / page id" required style="width:100%;margin-top:6px">
+      <input type="text" name="external_account_id" placeholder="Google account id (accounts/…), if known" style="width:100%;margin-top:6px">
+      <input type="text" name="display_name" placeholder="Listing title" style="width:100%;margin-top:6px">
+      <input type="text" name="listing_url" placeholder="Maps / page URL (optional)" style="width:100%;margin-top:6px">
+      <select name="location_id" aria-label="Map to site" style="width:100%;margin-top:6px"><option value="0">— map later —</option>{% for loc in locs if loc.active %}<option value="{{ loc.id }}">{{ loc.name }}</option>{% endfor %}</select>
+      <p style="margin:8px 0 0"><button class="ghost small">Record listing</button></p></form></div>
+</div>
+</div>
+{% endblock %}

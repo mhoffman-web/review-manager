@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Review alert</title></head>
+<body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2328;font-size:15px;line-height:1.45">
+<div style="max-width:680px;margin:0 auto;padding:20px">
+  <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#009ace">Review Manager · instant alert</p>
+  <h2 style="margin:0 0 14px">{% if b.negatives %}{{ b.negatives|length }} new negative review{{ '' if b.negatives|length==1 else 's' }}{% endif %}{% if b.negatives and (b.removed or b.failing) %} · {% endif %}{% if b.removed %}{{ b.removed|length }} removed{% endif %}{% if b.removed and b.failing %} · {% endif %}{% if b.failing %}{{ b.failing|length }} listing{{ '' if b.failing|length==1 else 's' }} failing to sync{% endif %}</h2>
+
+  {% for r in b.negatives %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #b91c1c;border-radius:8px;padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#b91c1c">New {{ r.rating }}-star review</div>
+    <div style="margin:4px 0 2px"><strong>{{ r.location.name if r.location else r.source_link.display_name }}</strong> <span style="color:#6b7280">· {{ r.author_name or 'Anonymous' }} · {{ to_local(r.created_at_source).strftime('%a %b %-d, %-I:%M %p') }}</span></div>
+    <div style="margin:6px 0;{% if r.is_rating_only %}color:#9ca3af;font-style:italic{% endif %}">{{ r.text or 'Rating only, no written review' }}</div>
+    {% if r.mention_names %}<div style="font-size:12px;color:#6b7280">Names: {{ r.mention_names|join(', ') }}</div>{% endif %}
+    <a href="{{ settings.app_base_url }}/reviews/{{ r.id }}" style="display:inline-block;margin-top:6px;background:#009ace;color:#fff;text-decoration:none;font-weight:700;font-size:12px;padding:7px 12px;border-radius:6px">Reply in Review Manager</a>
+  </div>
+  {% endfor %}
+
+  {% for r in b.removed %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #6b7280;border-radius:8px;padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7280">No longer on Google</div>
+    <div style="margin:4px 0 2px"><strong>{{ r.location.name if r.location else r.source_link.display_name }}</strong> <span style="color:#6b7280">· {{ r.rating or '–' }}★ · {{ r.author_name or 'Anonymous' }} · posted {{ to_local(r.created_at_source).strftime('%b %-d') }}, noticed gone {{ to_local(r.removed_at).strftime('%a %b %-d, %-I:%M %p') }}</span></div>
+    <div style="margin:6px 0;{% if r.is_rating_only %}color:#9ca3af;font-style:italic{% endif %}">{{ r.text or 'Rating only, no written review' }}</div>
+    {% if r.has_owner_reply %}<div style="font-size:12px;color:#6b7280">Our reply went with it: “{{ (r.owner_reply_text or '')[:160] }}”</div>{% endif %}
+    <div style="font-size:12px;color:#6b7280;margin-top:4px">Google does not say whether the reviewer deleted it or Google removed it. The last known version is kept in the app.</div>
+    <a href="{{ settings.app_base_url }}/reviews/{{ r.id }}" style="color:#1d4ed8;font-size:12px">Open in Review Manager</a>
+  </div>
+  {% endfor %}
+
+  {% for l in b.failing %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #c9a84c;border-radius:8px;padding:14px 16px;margin-bottom:12px">
+    <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#8a6a1e">Sync failing</div>
+    <div style="margin:4px 0 2px"><strong>{{ l.location.name if l.location else l.display_name }}</strong> <span style="color:#6b7280">· {{ l.fail_count }} runs in a row · last ok {{ to_local(l.last_synced_at).strftime('%b %-d, %-I:%M %p') if l.last_synced_at else 'never' }}</span></div>
+    <div style="margin:6px 0;font-size:13px;color:#374151;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap">{{ (l.last_error or '')[:400] }}</div>
+    <a href="{{ settings.app_base_url }}/locations" style="color:#1d4ed8;font-size:12px">Listings &amp; sync status</a>
+  </div>
+  {% endfor %}
+  <p style="color:#9ca3af;font-size:12px">Sent by Review Manager right after the sync that noticed these. Manage who gets alerts under Admin → Report recipients.</p>
+</div></body></html>

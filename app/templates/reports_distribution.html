@@ -1,7 +1,8 @@
 {% extends "base.html" %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_label %}{% from "_filters.html" import report_filters %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
-<div class="page-head"><a href="/reports?{{ fq }}">&larr; Reports</a><h1>Rating distribution by site</h1><span class="muted small">{{ range_label(dr) }}</span></div>
+<div class="page-head"><a href="/reports?{{ fq }}">&larr; Reports</a><h1>Rating distribution by site</h1><span class="muted small">{{ range_label(dr) }}</span>
+  <span class="right small"><a href="/reports/weekly?{{ fq|replace(dr.query(), '') }}">Last week &amp; QTD &rarr;</a> · <span class="muted">Export:</span> <a href="/export/distribution.csv?{{ fq }}">CSV</a> · <a href="/export/distribution.xlsx?{{ fq }}">Excel</a></span></div>
 {{ report_filters('/reports/distribution', dr, brands, groups, locations, brands_f, grp_f, loc_f) }}
 <div class="tiles">
   <div class="tile"><div class="v">{{ dist.total }}</div><div class="l">Reviews</div><div class="sub">{{ dist.rows|length }} sites</div></div>
@@ -12,15 +13,16 @@
   <div class="dist-legend"><span><i style="background:#e03b3b"></i>1★</span><span><i style="background:#ec835a"></i>2★</span><span><i style="background:#c9a84c"></i>3★</span><span><i style="background:#86b6ef"></i>4★</span><span><i style="background:#009ace"></i>5★</span></div>
   <div class="chart-wrap" style="height:{{ [240, 26 * dist.rows|length + 40]|max }}px"><canvas id="cDist"></canvas></div></div>
 <div class="card table-scroll" style="padding:0">
-<table><thead><tr><th>Site</th><th class="num">1★</th><th class="num">2★</th><th class="num">3★</th><th class="num">4★</th><th class="num">5★</th><th class="num">Total</th><th class="num">Avg</th><th class="num">≤3★ share</th></tr></thead><tbody>
+<table><thead><tr><th>Site</th><th class="num">1★</th><th class="num">2★</th><th class="num">3★</th><th class="num">4★</th><th class="num">5★</th><th class="num">Total</th><th class="num">Avg</th><th class="num">≤3★ share</th><th class="num" title="The listing's all-time average and review count as Google displays them">Google shows</th></tr></thead><tbody>
 {% set ns = namespace(brand=None) %}
-{% for r in dist.rows %}{% if r.brand != ns.brand %}{% set ns.brand = r.brand %}<tr class="brand-row"><td colspan="9"><span class="dot {{ r.brand }}"></span>{{ r.brand }}</td></tr>{% endif %}
+{% for r in dist.rows %}{% if r.brand != ns.brand %}{% set ns.brand = r.brand %}<tr class="brand-row"><td colspan="10"><span class="dot {{ r.brand }}"></span>{{ r.brand }}</td></tr>{% endif %}
 <tr class="clickable" onclick="location.href='/sites/{{ r.location_id }}?{{ dr.query() }}'"><td data-sort="{{ r.name }}">{% if r.location_id %}<a class="site-link" href="/sites/{{ r.location_id }}?{{ dr.query() }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
 {% for c in r.counts %}<td class="num star-cell" {% if loop.index <= 3 and c %}style="color:var(--critical)"{% endif %}>{{ c or '' }}</td>{% endfor %}
-<td class="num"><strong>{{ r.total }}</strong></td><td class="num">{{ r.avg or '–' }}</td><td class="num" {% if r.neg_pct > 8 %}style="color:var(--critical)"{% endif %}>{{ r.neg_pct }}%</td></tr>{% endfor %}
-<tr style="font-weight:700"><td>All selected sites</td>{% for c in dist.totals %}<td class="num">{{ c }}</td>{% endfor %}<td class="num">{{ dist.total }}</td><td class="num">{{ dist.avg or '–' }}</td><td class="num">{{ (dist.pct[0] + dist.pct[1] + dist.pct[2])|round(1) }}%</td></tr>
-{% if not dist.rows %}<tr><td colspan="9" class="muted" style="padding:24px;text-align:center">No reviews in this window for the selected sites.</td></tr>{% endif %}
+<td class="num"><strong>{{ r.total }}</strong></td><td class="num">{{ r.avg or '–' }}</td><td class="num" {% if r.neg_pct > 8 %}style="color:var(--critical)"{% endif %}>{{ r.neg_pct }}%</td><td class="num muted" data-sort="{{ r.listing_avg or '' }}">{% if r.listing_avg %}{{ r.listing_avg }} <span class="small">({{ r.listing_total }})</span>{% else %}–{% endif %}</td></tr>{% endfor %}
+<tr style="font-weight:700"><td>All selected sites</td>{% for c in dist.totals %}<td class="num">{{ c }}</td>{% endfor %}<td class="num">{{ dist.total }}</td><td class="num">{{ dist.avg or '–' }}</td><td class="num">{{ (dist.pct[0] + dist.pct[1] + dist.pct[2])|round(1) }}%</td><td></td></tr>
+{% if not dist.rows %}<tr><td colspan="10" class="muted" style="padding:24px;text-align:center">No reviews in this window for the selected sites.</td></tr>{% endif %}
 </tbody></table></div>
+{% if disputed %}<p class="muted small">{{ disputed }} review{{ '' if disputed==1 else 's' }} reported to Google and awaiting a decision {{ 'is' if disputed==1 else 'are' }} left out.</p>{% endif %}
 {% endblock %}
 {% block scripts %}{{ chart_script() }}
 <script>(function(){ var D = {{ dist_json|safe }}; if (!D.labels.length) return;

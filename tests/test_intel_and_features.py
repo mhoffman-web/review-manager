@@ -199,7 +199,83 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     assert s.execute(select(ReportRecipient).where(ReportRecipient.email == "lily@x.com")).scalar_one_or_none() is None
     mk(s, link, "w3", 4, "Nice wash, quick line", author="Kim Z", days_ago=0.2); s.commit()
     page = c.get("/?view=all").text
-    assert "Reviewer" in page and "Reply to review" in page and "Claim" not in page and "New site group" in page
+    assert "Reviewer" in page and 'data-reply="' in page and "Claim" not in page and "New site group" in page
+    # ---- round three: queue-aware prev/next, inline JSON reply, guardrails, events, removed view, report, exports, API
+    from app.models import ReviewEvent, ApiKey
+    from app.api import new_key, hash_key
+    w3 = s.execute(select(Review).where(Review.external_id == "w3")).scalar_one()
+    ctx = "view=all&q=&range=&start=&end=&sort=&dir=asc&sv=0"
+    detail = c.get(f"/reviews/{w3.id}?ctx={ctx}").text
+    assert "in this list" in detail and "Activity" in detail and "Report to Google" in detail
+    # guardrails: an unfilled placeholder and a wrong greeting come back as warnings (422 on the JSON path) until force=1
+    j = c.post(f"/reviews/{w3.id}/reply", data={"text": "Hi Taylor, thanks! {employee} was glad to help."}, headers={"Accept": "application/json"})
+    assert j.status_code == 422 and any("placeholder" in w for w in j.json()["warnings"]) and any("greets Taylor" in w for w in j.json()["warnings"])
+    j = c.post(f"/reviews/{w3.id}/reply", data={"text": "Hi Kim, thanks for the kind words!", "force": "1"}, headers={"Accept": "application/json"})
+    assert j.status_code == 200 and j.json()["ok"] and j.json()["reply"]["by"] == "Lily"
+    s.expire_all()
+    w3 = s.get(Review, w3.id)
+    assert w3.has_owner_reply and w3.first_replied_at is not None
+    first_at = w3.first_replied_at
+    # editing keeps the first-reply time (response time does not move) and logs an edit event
+    c.post(f"/reviews/{w3.id}/reply", data={"text": "Hi Kim, thanks so much for the kind words!", "force": "1"}, follow_redirects=False)
+    s.expire_all(); w3 = s.get(Review, w3.id)
+    kinds = [e.kind for e in w3.events]
+    assert w3.first_replied_at == first_at and "reply_posted" in kinds and "reply_edited" in kinds
+    # archive toggles with an undo link and an event; JSON form used by the keyboard shortcut
+    a = c.post(f"/reviews/{r.id}/archive", headers={"Accept": "application/json"}).json()
+    assert a["ok"] and a["archived"] and a["undo"].endswith("/archive")
+    c.post(a["undo"], headers={"Accept": "application/json"})
+    s.expire_all()
+    assert s.get(Review, r.id).is_archived is False and [e.kind for e in s.get(Review, r.id).events][-2:] == ["archived", "unarchived"]
+    # report to Google: disputed reviews leave the figures until Google decides
+    before_total = rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"]
+    c.post(f"/reviews/{r.id}/report", data={"action": "reported", "note": "not a customer"}, follow_redirects=False)
+    s.expire_all()
+    assert s.get(Review, r.id).is_disputed and rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"] == before_total - 1
+    assert "Disputed" in c.get("/?view=all").text
+    c.post(f"/reviews/{r.id}/report", data={"action": "kept"}, follow_redirects=False)
+    s.expire_all()
+    assert s.get(Review, r.id).report_status == "kept" and rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"] == before_total
+    # a hand-set theme survives re-classification and feeds the AI examples
+    c.post(f"/reviews/{r.id}/note", data={"note": "", "category": "Dryer"}, follow_redirects=False)
+    s.expire_all()
+    assert s.get(Review, r.id).category_source == "manual"
+    from app.sync import _manual_examples
+    assert ("Line wrapped around the building", "Dryer") in _manual_examples(s)
+    # removed view, exports, weekly, alerts preview, admin pages all render
+    r.is_deleted, r.removed_at = True, datetime.utcnow(); s.commit()
+    assert "Removed" in c.get("/").text and "No longer on Google" in c.get("/?view=removed").text
+    for path in ["/reports/weekly", f"/reports/weekly?as_of=2026-09-30&location_id={loc.id}", "/reports/alerts/preview", "/admin/sites", "/admin/api",
+                 "/export/reviews.csv?view=all", "/export/distribution.csv?range=last30", "/locations"]:
+        assert c.get(path).status_code == 200, path
+    x = c.get("/export/reviews.xlsx?view=all")
+    assert x.status_code == 200 and x.headers["content-type"].startswith("application/vnd.openxmlformats") and len(x.content) > 2000
+    assert "Line wrapped" in c.get("/export/reviews.csv?view=removed").text
+    # admin: add a site and record a listing by id
+    c.post("/admin/sites", data={"name": "ICON Murfreesboro", "brand": "ICON", "state": "tn", "city": "Murfreesboro", "snowflake_location_ids": "", "active": "1"}, follow_redirects=False)
+    s.expire_all()
+    new_loc = s.execute(select(Location).where(Location.name == "ICON Murfreesboro")).scalar_one()
+    assert new_loc.state == "TN"
+    c.post("/admin/sites/listing", data={"source": "google", "external_location_id": "locations/99887766", "display_name": "ICON Car Wash Murfreesboro", "location_id": str(new_loc.id)}, follow_redirects=False)
+    s.expire_all()
+    nl = s.execute(select(ReviewSourceLink).where(ReviewSourceLink.external_location_id == "99887766")).scalar_one()
+    assert nl.active and nl.location_id == new_loc.id
+    # a Wash N' Roll title is recorded but never mapped
+    c.post("/admin/sites/listing", data={"source": "google", "external_location_id": "5551212", "display_name": "Wash N' Roll Car Wash - Goodlettsville", "location_id": str(new_loc.id)}, follow_redirects=False)
+    s.expire_all()
+    wnr = s.execute(select(ReviewSourceLink).where(ReviewSourceLink.external_location_id == "5551212")).scalar_one()
+    assert not wnr.active and wnr.location_id is None
+    # read-only API with a key
+    raw = new_key()
+    s.add(ApiKey(name="Teams Portal", prefix=raw[:11], key_hash=hash_key(raw))); s.commit()
+    assert c.get("/api/v1/summary").status_code == 401 and c.get("/api/v1/summary", headers={"X-API-Key": "rm_nope"}).status_code == 403
+    summ = c.get("/api/v1/summary?range=last30", headers={"X-API-Key": raw}).json()
+    assert summ["totals"]["reviews"] >= 1 and len(summ["totals"]["distribution"]) == 5
+    assert any(x["name"] == "ICON Thompson Lane" and x["reviews"] >= 1 for x in summ["sites"])
+    rv = c.get("/api/v1/reviews?range=last30&limit=5", headers={"Authorization": f"Bearer {raw}"}).json()
+    assert rv["count"] >= 1 and {"site", "rating", "text", "replied", "link"} <= set(rv["reviews"][0])
+    assert c.get("/api/v1/sites", headers={"X-API-Key": raw}).json()["sites"][0]["brand"] == "ICON"
+    assert c.get("/api/v1/leaderboard?range=last30", headers={"X-API-Key": raw}).status_code == 200
 
 
 def test_inbox_server_sort(db):

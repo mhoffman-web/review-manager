@@ -1,67 +1,83 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, site, source_icon, badges %}
+{% extends "base.html" %}{% from "_stars.html" import stars, site, source_icon, badges, change_badge %}
 {% block content %}
-{% if msg %}<div class="msg {% if 'failed' in msg|lower %}err{% else %}ok{% endif %}">{{ msg }}</div>{% endif %}
-<div class="page-head"><a href="/">&larr; Inbox</a>
-  <span class="right small">{% if nav_links.prev %}<a href="/reviews/{{ nav_links.prev }}">&larr; Newer unanswered</a>{% endif %}{% if nav_links.next %}<a href="/reviews/{{ nav_links.next }}">Older unanswered &rarr;</a>{% endif %}</span></div>
+<div class="page-head"><a href="/{{ '?' ~ ctx if ctx else '' }}">&larr; Inbox</a>
+  <span class="right small">{% if nav_links.pos %}<span class="muted">{{ nav_links.pos }} of {{ nav_links.total }} in this list</span>{% endif %}
+    {% if nav_links.prev %}<a id="navPrev" href="/reviews/{{ nav_links.prev }}?ctx={{ ctx|urlencode }}">&larr; Previous</a>{% endif %}{% if nav_links.next %}<a id="navNext" href="/reviews/{{ nav_links.next }}?ctx={{ ctx|urlencode }}">Next &rarr;</a>{% endif %}</span></div>
+{% if r.is_deleted %}<div class="banner gray"><strong>No longer on Google.</strong> It stopped coming back from Google on {{ r.removed_at|local }}. Google does not say whether the reviewer deleted it or Google removed it. This is the last version we saw; it no longer counts in any figures and cannot be replied to.</div>{% endif %}
+{% if r.rating_delta %}<div class="banner {{ 'blue' if r.rating_delta > 0 else 'red' }}"><strong>The reviewer changed the rating</strong> from {{ r.prev_rating }}★ to {{ r.rating }}★ on {{ r.rating_changed_at|local }}.{% if r.rating_delta > 0 and r.first_replied_at and r.first_replied_at < r.rating_changed_at %} That was after our reply, so it counts as recovered.{% elif r.rating_delta < 0 and r.has_owner_reply %} Our reply from before the change is still posted; consider updating it.{% endif %}</div>{% endif %}
+{% if r.is_disputed %}<div class="banner gold"><strong>Reported to Google</strong> on {{ r.reported_at|local }}{% if r.reported_by %} by {{ r.reported_by.name }}{% endif %}. Left out of averages until Google decides.{% if r.report_note %} Note: {{ r.report_note }}{% endif %}</div>{% endif %}
 <div class="grid side">
 <div>
   <div class="card">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      {{ source_icon(r) }} {{ stars(r) }} <strong>{{ site(r) }}</strong>
-      <span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|local }} ({{ r.created_at_source|age }} ago){% if r.was_edited %} · <span class="pill small">Updated {{ r.updated_at_source|local('%b %-d') }}</span>{% endif %}</span>
+      {{ source_icon(r) }} {{ stars(r) }} {{ change_badge(r) }} <strong>{{ site(r) }}</strong>
+      <span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|local }} ({{ r.created_at_source|age }} ago){% if r.was_edited and not r.rating_delta %} · <span class="pill small">Updated {{ r.updated_at_source|local('%b %-d') }}</span>{% endif %}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
       {% if r.is_archived %}<span class="pill">Archived{% if r.archived_at %} {{ r.archived_at|local('%b %-d') }}{% endif %}</span>{% endif %}
-      {% if not r.has_owner_reply %}<form method="post" action="/reviews/{{ r.id }}/archive" style="display:inline"><button class="ghost small" title="{% if r.is_archived %}Put it back in the inbox{% else %}Skip replying; stops counting as unanswered{% endif %}">{% if r.is_archived %}Unarchive{% else %}Archive{% endif %}</button></form>{% endif %}
+      {% if not r.has_owner_reply and not r.is_deleted %}<form method="post" action="/reviews/{{ r.id }}/archive" id="archiveForm" style="display:inline"><button class="ghost small" title="{% if r.is_archived %}Put it back in the inbox{% else %}Skip replying; stops counting as unanswered (E){% endif %}">{% if r.is_archived %}Unarchive{% else %}Archive{% endif %}</button></form>{% endif %}
       </span>
     </div>
     <p class="review-text" style="margin:0">{% if r.is_rating_only %}<span class="muted">The customer left a rating with no written review.</span>{% else %}{{ r.text }}{% endif %}</p>
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-      {% for m in r.mentions %}<span class="pill emp">@{{ m.name }}{% if m.employee %} <span class="muted">· {{ m.employee.location.name if m.employee.location else 'roster' }}</span>{% endif %} <form method="post" action="/reviews/{{ r.id }}/mentions/{{ m.id }}/delete" style="display:inline"><button class="x" title="Remove">&times;</button></form></span>{% endfor %}
-      <form method="post" action="/reviews/{{ r.id }}/mentions" style="display:inline-flex;gap:4px"><input type="text" name="name" placeholder="Tag an employee" style="padding:3px 8px;font-size:12px;width:150px"><button class="ghost small">Add</button></form>
+      {% for m in r.mentions %}<span class="pill emp">@{{ m.name }}{% if m.employee %} <span class="muted">· {{ m.employee.location.name if m.employee.location else 'roster' }}</span>{% endif %} <form method="post" action="/reviews/{{ r.id }}/mentions/{{ m.id }}/delete" style="display:inline"><button class="x" title="Remove" aria-label="Remove {{ m.name }} tag">&times;</button></form></span>{% endfor %}
+      <form method="post" action="/reviews/{{ r.id }}/mentions" style="display:inline-flex;gap:4px"><input type="text" name="name" placeholder="Tag an employee" aria-label="Tag an employee" style="padding:3px 8px;font-size:12px;width:150px"><button class="ghost small">Add</button></form>
     </div>
   </div>
 
-  <div class="card">
+  {% if not r.is_deleted %}
+  <div class="card" id="reply">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h2 style="margin:0">{% if r.has_owner_reply %}Our reply{% else %}Reply{% endif %}</h2>
       {% if ai_enabled %}<button type="button" class="ghost small" id="draftBtn" title="Draft with Claude using the house rules">✦ Draft with AI</button><span id="draftStatus" class="muted small"></span>{% else %}<span class="muted small" title="Set ANTHROPIC_API_KEY to enable">AI drafting off</span>{% endif %}</div>
     {% if r.has_owner_reply %}<div class="quote">{{ r.owner_reply_text }}</div>
-    <p class="muted small">{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}{% if last %}Replied by {{ last.created_by.name if last.created_by else 'us' }} · {% endif %}Posted on {{ r.source|capitalize }} {{ r.owner_reply_updated_at|local }}{% if r.response_hours is not none %} · {{ r.response_hours|hours }} after the review{% endif %}. Posting again replaces it.</p>{% endif %}
-    {% if tpls %}<div class="chips" style="margin:6px 0 10px">{% for t in tpls %}{% if t.suggested or loop.index <= 6 %}<button type="button" class="chip {% if t.suggested %}suggested{% endif %}" data-tpl="{{ t.id }}" title="{{ t.band }} · used {{ t.usage }}×">{% if t.suggested %}★ {% endif %}{{ t.name }}</button>{% endif %}{% endfor %}
+    <p class="muted small">{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}{% if last %}Replied by {{ last.created_by.name if last.created_by else 'us' }} · {% endif %}First posted {{ r.replied_at|local }}{% if r.response_hours is not none %} ({{ r.response_hours|hours }} after the review){% endif %}{% if r.owner_reply_updated_at and r.first_replied_at and r.owner_reply_updated_at > r.first_replied_at %} · edited {{ r.owner_reply_updated_at|local }}{% endif %}. Edit below and post again to replace it on Google; the response time stays as it was.</p>{% endif %}
+    {% if warnings %}<div class="warn-box" id="warnBox"><strong>Before this goes public:</strong><ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul><span class="muted small">Fix it in the box below, or post it as written.</span></div>{% endif %}
+    {% if tpls %}<div class="chips" style="margin:6px 0 10px">{% for t in tpls %}{% if t.suggested or loop.index <= 6 %}<button type="button" class="chip {% if t.suggested %}suggested{% endif %}" data-tpl="{{ t.id }}" title="{{ t.band }} · used {{ t.usage }}× · press {{ loop.index }}">{% if t.suggested %}★ {% endif %}{{ loop.index }} · {{ t.name }}</button>{% endif %}{% endfor %}
       {% if tpls|length > 6 %}<details style="display:inline"><summary class="chip">more…</summary><span class="chips" style="margin-top:6px">{% for t in tpls %}{% if not (t.suggested or loop.index <= 6) %}<button type="button" class="chip" data-tpl="{{ t.id }}" title="{{ t.band }} · used {{ t.usage }}×">{{ t.name }}</button>{% endif %}{% endfor %}</span></details>{% endif %}</div>{% endif %}
     <form method="post" action="/reviews/{{ r.id }}/reply" id="replyForm">
-      <input type="hidden" name="template_id" id="templateId" value="0"><input type="hidden" name="ai_generated" id="aiFlag" value="0">
-      <textarea name="text" id="replyText" required placeholder="Hi {{ r.first_name }}, thanks for ..." maxlength="4096">{{ r.owner_reply_text or '' }}</textarea>
+      <input type="hidden" name="template_id" id="templateId" value="0"><input type="hidden" name="ai_generated" id="aiFlag" value="0"><input type="hidden" name="ctx" value="{{ ctx }}"><input type="hidden" name="force" id="forceFlag" value="0">
+      <textarea name="text" id="replyText" required placeholder="Hi {{ r.first_name }}, thanks for ..." maxlength="4096" aria-label="Reply text">{{ draft if draft is not none else (r.owner_reply_text or '') }}</textarea>
       <div class="composer-foot">
-        <button class="primary" name="go_next" value="0">{% if r.has_owner_reply %}Update reply{% else %}Post reply{% endif %}</button>
+        <button class="primary" name="go_next" value="0">{% if warnings %}Post as written{% elif r.has_owner_reply %}Update reply{% else %}Post reply{% endif %}</button>
         {% if not r.has_owner_reply and nav_links.next %}<button class="ghost" name="go_next" value="1">Post &amp; next</button>{% endif %}
         <span class="right"><span id="charCount">0</span> / 4096 · ⌘↵ posts</span>
       </div>
     </form>
     {% if r.has_owner_reply %}<form method="post" action="/reviews/{{ r.id }}/reply/delete" style="margin-top:10px" onsubmit="return confirm('Remove our reply from Google?')"><button class="danger small">Remove reply</button></form>{% endif %}
   </div>
+  {% elif r.has_owner_reply %}<div class="card"><h3>Our reply (as last seen)</h3><div class="quote">{{ r.owner_reply_text }}</div></div>{% endif %}
 
-  {% if r.responses %}
-  <div class="card"><h3>History</h3>
-  <table><thead><tr><th>When</th><th>Who</th><th>Status</th><th data-nosort>Text</th></tr></thead><tbody>
-  {% for h in r.responses|reverse %}<tr><td class="ink2" style="white-space:nowrap" data-sort="{{ h.created_at.isoformat() }}">{{ h.created_at|local }}</td><td>{{ h.created_by.name if h.created_by else '—' }}{% if h.ai_generated %}<div class="muted small">AI draft</div>{% elif h.template_id %}<div class="muted small">template</div>{% endif %}</td>
-  <td><span class="pill {% if h.status=='posted' %}good{% elif h.status=='failed' %}bad{% endif %}">{{ h.status }}</span>{% if h.error %}<div class="muted small">{{ h.error[:300] }}</div>{% endif %}</td>
-  <td class="review-text" style="font-size:13px">{{ h.text }}</td></tr>{% endfor %}</tbody></table></div>
-  {% endif %}
+  <div class="card"><h3>Activity</h3>
+  {% if timeline %}<ol class="timeline">{% for ev in timeline %}<li class="{{ ev.kind }}"><span class="when" title="{{ ev.at|local }}">{{ ev.at|local('%b %-d, %-I:%M %p') }}</span><span class="what"><strong>{{ ev.label }}</strong> <span class="muted">· {{ ev.who }}</span>
+    {% set d = ev.detail %}{% if ev.kind in ['rating_changed'] %}<div class="small">{{ d['from'] }}★ → {{ d['to'] }}★</div>{% elif ev.kind == 'text_changed' %}<div class="small muted">Before: “{{ d.before }}”</div>{% elif ev.kind in ['reply_posted','reply_edited','reply_deleted'] and d.text %}<div class="small quote-lite">{{ d.text }}</div>{% if d.ai %}<span class="pill small">AI draft</span>{% elif d.template %}<span class="pill small">template</span>{% endif %}{% elif ev.kind == 'reply_failed' %}<div class="small" style="color:var(--critical)">{{ d.error }}</div>{% elif ev.kind == 'category_changed' %}<div class="small">{{ d['from'] or '—' }} → {{ d['to'] or '—' }}</div>{% elif ev.kind == 'note_saved' and d.text %}<div class="small muted">{{ d.text }}</div>{% elif ev.kind in ['mention_added','mention_removed'] %}<div class="small">@{{ d.name }}</div>{% elif ev.kind == 'report_outcome' %}<div class="small">{{ d.outcome }}{% if d.note %} · {{ d.note }}{% endif %}</div>{% elif ev.kind == 'reported' and d.note %}<div class="small muted">{{ d.note }}</div>{% elif ev.kind == 'alert_sent' %}<div class="small muted">{{ d.what|replace('_',' ') }} · {{ d.to }} recipient(s)</div>{% endif %}</span></li>{% endfor %}</ol>
+  {% else %}<p class="muted small" style="margin:0">Nothing yet. Replies, edits, notes, rating changes and reports will show here.</p>{% endif %}</div>
 </div>
 <div>
   <div class="card"><h3>Internal</h3>
     <form method="post" action="/reviews/{{ r.id }}/note">
-      <label class="small muted">Theme</label>
-      <select name="category" style="width:100%;margin:4px 0 8px"><option value="">— none —</option>
+      <label class="small muted" for="catSel">Theme{% if r.category_source == 'manual' %} <span class="pill small">set by hand</span>{% elif r.category_source == 'ai' %} <span class="pill small">AI</span>{% endif %}</label>
+      <select name="category" id="catSel" style="width:100%;margin:4px 0 8px"><option value="">— none —</option>
       {% for c in THEMES %}<option value="{{ c }}" {% if r.category==c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
-      <textarea name="note" style="min-height:70px" placeholder="Not visible to the customer">{{ r.internal_note or '' }}</textarea>
-      <div class="composer-foot"><button class="ghost small">Save</button></div>
+      <textarea name="note" style="min-height:70px" placeholder="Not visible to the customer" aria-label="Internal note">{{ r.internal_note or '' }}</textarea>
+      <div class="composer-foot"><button class="ghost small">Save</button><span class="muted small">Changing the theme teaches the AI classifier.</span></div>
     </form>
+  </div>
+  <div class="card"><h3>Report to Google</h3>
+    {% if not r.report_status %}
+    <p class="small muted" style="margin:0 0 8px">For fake, abusive or off-topic reviews. Google has no API for this: open its review tool, paste the details, then record it here so it shows as disputed and stays out of averages while Google decides.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><a class="ms-btn" style="width:auto;height:32px;font-size:11px;padding:0 12px" href="{{ GOOGLE_REPORT_TOOL }}" target="_blank" rel="noopener">Open Google's review tool ↗</a><button type="button" class="ghost small" id="copyDetails">Copy details</button><span class="muted small" id="copyStatus"></span></div>
+    <form method="post" action="/reviews/{{ r.id }}/report"><input type="hidden" name="action" value="reported"><input type="text" name="note" placeholder="Why (optional), e.g. not a customer" aria-label="Reason" style="width:100%;margin-bottom:6px"><button class="ghost small">Mark as reported</button></form>
+    {% elif r.is_disputed %}
+    <p class="small" style="margin:0 0 8px"><span class="pill small warn">Disputed</span> Reported {{ r.reported_at|local }}{% if r.reported_by %} by {{ r.reported_by.name }}{% endif %}. Google usually emails within a few days. Record the outcome:</p>
+    <form method="post" action="/reviews/{{ r.id }}/report" style="display:flex;gap:6px;flex-wrap:wrap"><input type="text" name="note" placeholder="Note (optional)" aria-label="Outcome note" style="flex:1;min-width:120px"><button class="ghost small" name="action" value="removed">Google removed it</button><button class="ghost small" name="action" value="kept">Google kept it</button><button class="ghost small" name="action" value="clear" title="Reported by mistake">Clear</button></form>
+    {% else %}
+    <p class="small" style="margin:0 0 8px">Reported {{ r.reported_at|local('%b %-d') }}; outcome: <strong>{{ 'Google removed it' if r.report_status == 'removed' else 'Google kept it' }}</strong>.{% if r.report_note %} {{ r.report_note }}{% endif %}</p>
+    <form method="post" action="/reviews/{{ r.id }}/report"><button class="ghost small" name="action" value="clear">Clear report</button></form>
+    {% endif %}
   </div>
   <div class="card"><h3>Listing</h3>
     <dl class="kv">
       <dt>Brand</dt><dd>{{ r.location.brand if r.location else '—' }}</dd>
-      <dt>Listing avg</dt><dd>{{ r.source_link.avg_rating or '–' }} ({{ r.source_link.total_review_count or '–' }} reviews)</dd>
+      <dt>Google shows</dt><dd>{% if listing %}{{ listing.avg }}★ from {{ listing.total or '–' }} reviews{% else %}{{ r.source_link.avg_rating or '–' }} ({{ r.source_link.total_review_count or '–' }} reviews){% endif %}</dd>
       <dt>Source</dt><dd>{{ r.source|capitalize }}{% if r.source_link.listing_url %} · <a href="{{ r.source_link.listing_url }}" target="_blank" rel="noopener">open on Maps</a>{% endif %}</dd>
       <dt>Review id</dt><dd class="muted small" style="word-break:break-all">{{ r.external_id }}</dd>
     </dl>
@@ -76,34 +92,44 @@
 (function(){
   var tpls = {{ templates_json|safe }};
   var ta = document.getElementById('replyText'), cc = document.getElementById('charCount');
-  var tplId = document.getElementById('templateId'), aiFlag = document.getElementById('aiFlag');
-  var key = 'rm-draft-{{ r.id }}', saved = null;
-  try { saved = sessionStorage.getItem(key); } catch (e) {}
-  if (saved && !ta.value) { ta.value = saved; }
-  function count(){ cc.textContent = ta.value.length; }
-  function persist(){ try { if (ta.value.trim()) sessionStorage.setItem(key, ta.value); else sessionStorage.removeItem(key); } catch (e) {} }
-  ta.addEventListener('input', function(){ count(); persist(); tplId.value = 0; aiFlag.value = 0; }); count();
-  document.getElementById('replyForm').addEventListener('submit', function(){ try { sessionStorage.removeItem(key); } catch (e) {} });
-  document.querySelectorAll('.chip[data-tpl]').forEach(function(b){
-    b.addEventListener('click', function(){
-      var t = tpls.find(function(x){ return String(x.id) === b.dataset.tpl; });
-      if (!t) return;
-      if (ta.value.trim() && !confirm('Replace the current draft with this template?')) return;
-      ta.value = t.body; tplId.value = t.id; aiFlag.value = 0; count(); persist(); ta.focus();
+  if (ta) {
+    var tplId = document.getElementById('templateId'), aiFlag = document.getElementById('aiFlag'), force = document.getElementById('forceFlag');
+    var key = 'rm-draft-{{ r.id }}', saved = null;
+    try { saved = sessionStorage.getItem(key); } catch (e) {}
+    if (saved && !ta.value) { ta.value = saved; }
+    function count(){ cc.textContent = ta.value.length; }
+    function persist(){ try { if (ta.value.trim()) sessionStorage.setItem(key, ta.value); else sessionStorage.removeItem(key); } catch (e) {} }
+    ta.addEventListener('input', function(){ count(); persist(); tplId.value = 0; aiFlag.value = 0; force.value = 0; }); count();
+    {% if warnings %}force.value = 1; /* the person has seen the warnings; the next submit is deliberate unless they edit */{% endif %}
+    document.getElementById('replyForm').addEventListener('submit', function(){ try { sessionStorage.removeItem(key); } catch (e) {} });
+    document.querySelectorAll('.chip[data-tpl]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var t = tpls.find(function(x){ return String(x.id) === b.dataset.tpl; });
+        if (!t) return;
+        if (ta.value.trim() && !confirm('Replace the current draft with this template?')) return;
+        ta.value = t.body; tplId.value = t.id; aiFlag.value = 0; force.value = 0; count(); persist(); ta.focus();
+      });
     });
-  });
-  var draftBtn = document.getElementById('draftBtn'), st = document.getElementById('draftStatus');
-  if (draftBtn) draftBtn.addEventListener('click', function(){
-    if (ta.value.trim() && !confirm('Replace the current draft with an AI draft?')) return;
-    draftBtn.disabled = true; st.textContent = 'Drafting…';
-    fetch('/reviews/{{ r.id }}/draft', { method: 'POST', headers: { 'Accept': 'application/json' } })
-      .then(function(r){ return r.json(); })
-      .then(function(j){ if (j.ok) { ta.value = j.text; tplId.value = 0; aiFlag.value = 1; count(); persist(); ta.focus(); st.textContent = 'Draft ready. Read it before posting.'; } else { st.textContent = j.error || 'Drafting failed'; } })
-      .catch(function(){ st.textContent = 'Drafting failed'; })
-      .finally(function(){ draftBtn.disabled = false; });
-  });
-  document.addEventListener('keydown', function(e){
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && document.activeElement === ta) { document.getElementById('replyForm').requestSubmit(); }
+    var draftBtn = document.getElementById('draftBtn'), st = document.getElementById('draftStatus');
+    if (draftBtn) draftBtn.addEventListener('click', function(){
+      if (ta.value.trim() && !confirm('Replace the current draft with an AI draft?')) return;
+      draftBtn.disabled = true; st.textContent = 'Drafting…';
+      fetch('/reviews/{{ r.id }}/draft', { method: 'POST', headers: { 'Accept': 'application/json' } })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ if (j.ok) { ta.value = j.text; tplId.value = 0; aiFlag.value = 1; force.value = 0; count(); persist(); ta.focus(); st.textContent = 'Draft ready. Read it before posting.'; } else { st.textContent = j.error || 'Drafting failed'; } })
+        .catch(function(){ st.textContent = 'Drafting failed'; })
+        .finally(function(){ draftBtn.disabled = false; });
+    });
+    document.addEventListener('keydown', function(e){
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && document.activeElement === ta) { document.getElementById('replyForm').requestSubmit(); }
+    });
+  }
+  var copy = document.getElementById('copyDetails');
+  if (copy) copy.addEventListener('click', function(){
+    var details = {{ ({"site": r.location.name if r.location else r.source_link.display_name, "reviewer": r.author_name or "Anonymous", "rating": r.rating, "posted": r.created_at_source|local, "text": r.text or "(rating only)", "review_id": r.external_id, "listing": r.source_link.listing_url or ""})|tojson }};
+    var txt = 'Business: ' + details.site + '\nReviewer: ' + details.reviewer + '\nRating: ' + details.rating + ' of 5\nPosted: ' + details.posted + '\nReview: ' + details.text + '\nReview id: ' + details.review_id + (details.listing ? '\nListing: ' + details.listing : '');
+    var st = document.getElementById('copyStatus');
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function(){ st.textContent = 'Copied'; }).catch(function(){ window.prompt('Copy these details:', txt); });
   });
 })();
 </script>

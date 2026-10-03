@@ -1,14 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-head"><h1>Listings</h1>
-{% if user.is_admin %}<form class="right" method="post" action="/sync"><label class="inline small"><input type="checkbox" name="full" value="1"> full re-pull</label><button class="primary">Sync now</button></form>{% endif %}</div>
+{% if user.is_admin %}<span class="right"><a class="chip" href="/admin/sites">Add or edit sites</a><form method="post" action="/sync" style="display:inline-flex;gap:8px;align-items:center"><label class="inline small"><input type="checkbox" name="full" value="1"> full re-pull</label><button class="primary">Sync now</button></form></span>{% endif %}</div>
+{% set h = nav.sync %}
+<div class="tiles">
+  <div class="tile {% if h.stale %}bad{% endif %}"><div class="v">{% if h.last_sync %}{{ h.last_sync|age }}{% else %}–{% endif %}</div><div class="l">Since last sync</div><div class="sub">{% if h.last_sync %}{{ h.last_sync|local }}{% if h.stale %} · overdue{% endif %}{% else %}no sync yet{% endif %}</div></div>
+  <div class="tile"><div class="v">{% if h.next_in_min is not none %}{{ h.next_in_min }}m{% else %}–{% endif %}</div><div class="l">Next sync due</div><div class="sub">every {{ h.interval_min }} min · full re-pull daily after {{ settings.full_sync_hour_local }}:00</div></div>
+  <div class="tile {% if h.failing %}bad{% endif %}"><div class="v">{{ h.failing }}</div><div class="l">Listings failing</div><div class="sub">{% if h.failing %}alert emailed after {{ settings.alert_fail_threshold }} failures in a row{% else %}all listings syncing{% endif %}</div></div>
+  <div class="tile"><div class="v">{{ links|selectattr('active')|list|length }}</div><div class="l">Active listings</div><div class="sub">{{ links|rejectattr('active')|list|length }} inactive</div></div>
+</div>
 <div class="card table-scroll" style="padding:0">
 <table><thead><tr><th>Source</th><th>Listing</th><th>Mapped site</th><th class="num">Listing avg</th><th class="num">Total</th><th>Last sync</th><th>Status</th></tr></thead><tbody>
 {% for l in links %}<tr style="{% if not l.active %}opacity:.55{% endif %}"><td>{{ l.source|capitalize }}</td><td>{{ l.display_name }}<div class="muted small">{{ l.address or '' }}</div></td>
 <td>{% if user.is_admin %}<form method="post" action="/locations/{{ l.id }}/link" style="display:flex;gap:6px"><select name="location_id"><option value="0">— unmapped —</option>{% for loc in locs %}<option value="{{ loc.id }}" {% if l.location_id==loc.id %}selected{% endif %}>{{ loc.name }}</option>{% endfor %}</select><button class="ghost small">Save</button></form>{% else %}{{ l.location.name if l.location else '—' }}{% endif %}</td>
 <td class="num">{{ l.avg_rating or '–' }}</td><td class="num">{{ l.total_review_count or '–' }}</td>
 <td class="ink2" data-sort="{{ l.last_synced_at.isoformat() if l.last_synced_at else '' }}">{{ l.last_synced_at|local }}</td>
-<td>{% if not l.active %}<span class="pill">inactive</span>{% elif l.last_sync_status=='ok' %}<span class="pill good">ok</span>{% elif l.last_sync_status %}<span class="pill bad">{{ l.last_sync_status }}</span>{% endif %}</td></tr>
+<td>{% if not l.active %}<span class="pill">inactive</span>{% elif l.last_sync_status=='ok' %}<span class="pill good">ok</span>{% elif l.last_sync_status %}<span class="pill bad">{{ l.last_sync_status }}{% if l.fail_count %} ×{{ l.fail_count }}{% endif %}</span>{% if l.last_error %}<div class="muted small" style="max-width:260px">{{ l.last_error[:140] }}</div>{% endif %}{% endif %}</td></tr>
 {% else %}<tr><td colspan="7" class="muted" style="padding:24px;text-align:center">No listings yet. Run <code>python cli.py discover-locations</code> after Google approves API access.</td></tr>{% endfor %}</tbody></table></div>
 <p class="muted small">Inactive listings are recorded but never synced. Legacy Wash N' Roll profiles stay inactive on purpose.</p>
 <div class="card"><h3>Recent sync runs</h3>

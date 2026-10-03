@@ -154,9 +154,9 @@ def test_response_time_trends_and_templates(db):
     fake = FakeAdapter([nr("a", 5, "great", 10, reply="thanks"), nr("b", 1, "awful", 0.2), nr("d", 4, "fine", 3, reply="ty")])
     sync_link(s, link, full=True, adapter=fake); s.commit()
     a = s.execute(select(Review).where(Review.external_id == "a")).scalar_one()
-    a.owner_reply_updated_at = a.created_at_source + timedelta(hours=6)
+    a.owner_reply_updated_at = a.first_replied_at = a.created_at_source + timedelta(hours=6)
     d = s.execute(select(Review).where(Review.external_id == "d")).scalar_one()
-    d.owner_reply_updated_at = d.created_at_source + timedelta(hours=30)
+    d.owner_reply_updated_at = d.first_replied_at = d.created_at_source + timedelta(hours=30)
     d.category = "Long Line"; d.rating = 2
     s.commit()
     rep = build_report(s)
@@ -198,3 +198,53 @@ def test_web_pages_render(db):
     assert r.status_code == 303
     s.expire_all()
     assert s.get(Review, rid).assigned_to_id == u.id
+
+
+def test_rating_change_removal_and_alerts(db):
+    from app.alerts import collect, send_alerts
+    from app.models import ReportRecipient, ReviewEvent
+    from app.sources.facebook import FacebookPageAdapter
+    s, link = db
+    fake = FakeAdapter([nr("p", 4, "pretty good", 0.3), nr("q", 1, "terrible", 0.2)])
+    sync_link(s, link, full=True, adapter=fake); s.commit()
+    # the reviewer lowers p to 2 and q disappears on the next full pull
+    fake2 = FakeAdapter([nr("p", 2, "pretty good", 0.3)])
+    sync_link(s, link, full=True, adapter=fake2); s.commit()
+    p = s.execute(select(Review).where(Review.external_id == "p")).scalar_one()
+    q = s.execute(select(Review).where(Review.external_id == "q")).scalar_one()
+    assert p.rating == 2 and p.prev_rating == 4 and p.rating_delta == -2 and p.rating_changed_at is not None
+    assert q.is_deleted and q.removed_at is not None and [e.kind for e in q.events] == ["removed"]
+    assert any(e.kind == "rating_changed" and e.detail == {"from": 4, "to": 2} for e in p.events)
+    # a full pull that returns nothing is a hiccup, not a mass deletion
+    sync_link(s, link, full=True, adapter=FakeAdapter([])); s.commit()
+    s.expire_all()
+    assert s.get(Review, p.id).is_deleted is False
+    # alerts: the new negative (p is now 2 stars, first seen recently) and the removed q are waiting
+    b = collect(s)
+    assert {r.external_id for r in b.negatives} == {"p"} and {r.external_id for r in b.removed} == {"q"}
+    assert send_alerts(s, dry_run=True) is None                       # nobody on the alerts list yet -> nothing stamped
+    s.add(ReportRecipient(email="ops@x.com", edition="alerts")); s.commit()
+    out = send_alerts(s, dry_run=True)
+    assert out and out["count"] == 2 and "1 new negative review" in out["subject"] and "1 review removed" in out["subject"] and "ops@x.com" in out["to"]
+    assert "terrible" in out["html"] and "pretty good" in out["html"]
+    s.commit(); s.expire_all()
+    assert s.get(Review, p.id).alerted_at is not None and s.get(Review, q.id).removal_notified_at is not None and collect(s).empty
+    # failing listing: three errors in a row raise an alert once
+    class Boom:
+        def fetch_reviews(self, link, since=None):
+            raise RuntimeError("401 token revoked")
+    for _ in range(3):
+        sync_link(s, link, adapter=Boom()); s.commit()
+    s.expire_all()
+    assert link.fail_count == 3 and "token revoked" in link.last_error
+    b = collect(s)
+    assert [l.id for l in b.failing] == [link.id]
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("p", 2, "pretty good", 0.3)])); s.commit(); s.expire_all()
+    assert link.fail_count == 0 and link.last_error is None
+    # Facebook recommendations normalise into the same shape; the page's own comment is the owner reply
+    raw = {"created_time": "2026-09-30T14:05:42+0000", "recommendation_type": "negative", "review_text": "Dryer left the car soaked",
+           "reviewer": {"name": "Jo Bloggs", "id": "77"}, "open_graph_story": {"id": "1001_2002", "comments": {"data": [
+               {"message": "So sorry Jo, call us.", "created_time": "2026-09-30T16:00:00+0000", "from": {"id": "PAGE1", "name": "ICON Car Wash"}}]}}}
+    n = FacebookPageAdapter.normalize(raw, "PAGE1")
+    assert n.external_id == "1001_2002" and n.rating == 1 and n.owner_reply_text == "So sorry Jo, call us." and n.created_at == datetime(2026, 9, 30, 14, 5, 42)
+    assert FacebookPageAdapter.normalize({"created_time": "2026-09-30T14:05:42+0000", "recommendation_type": "positive", "reviewer": {"name": "A"}}, "PAGE1").rating == 5

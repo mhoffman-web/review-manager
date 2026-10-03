@@ -83,46 +83,30 @@ def cmd_google_auth(_a):
 
 def cmd_discover_locations(_a):
     """List every GBP account + location the token can see and upsert review_sources rows."""
-    from app.sources.google import GoogleBusinessProfileAdapter
-    g = GoogleBusinessProfileAdapter()
-    accounts = g.list_accounts()
-    if not accounts:
-        sys.exit("no accounts visible to this token")
+    from app.discovery import discover_google
     with session_scope() as s:
-        locs = s.execute(select(Location)).scalars().all()
-        for acct in accounts:
-            print(f"\n{acct.get('accountName')}  ({acct['name']}, {acct.get('type')})")
-            for loc in g.list_locations(acct["name"]):
-                loc_id = loc["name"].split("/")[-1]
-                addr = loc.get("storefrontAddress") or {}
-                address = ", ".join(filter(None, [" ".join(addr.get("addressLines", [])), addr.get("locality"), addr.get("administrativeArea")]))
-                maps_url = (loc.get("metadata") or {}).get("mapsUri")
-                link = s.execute(select(ReviewSourceLink).where(
-                    ReviewSourceLink.source == "google", ReviewSourceLink.external_location_id == loc_id)).scalar_one_or_none()
-                if link is None:
-                    link = ReviewSourceLink(source="google", external_location_id=loc_id)
-                    s.add(link)
-                link.external_account_id = acct["name"].split("/")[-1]
-                link.display_name = loc.get("title")
-                link.address = address or None
-                link.listing_url = maps_url
-                title = (loc.get("title") or "").lower()
-                excluded = any(pat.lower() in title for pat in settings.listing_exclude_patterns)
-                # Best-effort auto-map by brand keyword + city/name; confirm on the Locations page.
-                if link.location_id is None and not excluded:
-                    city = (addr.get("locality") or "").lower()
-                    state = addr.get("administrativeArea")
-                    for cand in locs:
-                        brand_kw = {"WashU": "washu", "ICON": "icon", "WA": "wash 38301"}.get(cand.brand, cand.brand.lower())
-                        site_kw = cand.name.split(" ", 1)[-1].lower()
-                        if brand_kw in title and (site_kw in title or (cand.city and cand.city.lower() == city and cand.state == state)):
-                            link.location_id = cand.id
-                            break
-                # Only mapped listings are synced. Excluded/unmapped ones are recorded but inactive.
-                link.active = bool(link.location_id) and not excluded
-                mapped = "EXCLUDED (left alone)" if excluded else next((c.name for c in locs if c.id == link.location_id), "UNMAPPED (inactive)")
-                print(f"  {loc_id:<22} {loc.get('title', ''):<40} {address:<45} -> {mapped}")
-    print("\nUNMAPPED rows stay inactive until mapped with `link-location` or on the /locations page. EXCLUDED rows are never synced. Then run `backfill`.")
+        totals = discover_google(s)
+        links = s.execute(select(ReviewSourceLink).where(ReviewSourceLink.source == "google").order_by(ReviewSourceLink.display_name)).scalars().all()
+        for link in links:
+            state = "EXCLUDED (left alone)" if not link.active and link.location_id is None and any(p.lower() in (link.display_name or "").lower() for p in settings.listing_exclude_patterns) \
+                else (link.location.name if link.location else "UNMAPPED (inactive)")
+            print(f"  {link.external_location_id:<22} {(link.display_name or ''):<40} {(link.address or ''):<45} -> {state}")
+    print(f"\n{totals['listings']} listings across {totals['accounts']} account(s); {totals['mapped']} mapped. Map the rest on Admin -> Sites & listings.")
+
+
+def cmd_discover_facebook(_a):
+    """Record every Facebook Page the FACEBOOK_ACCESS_TOKEN can manage."""
+    from app.discovery import discover_facebook
+    with session_scope() as s:
+        totals = discover_facebook(s)
+    print(f"{totals['pages']} pages, {totals['mapped']} mapped to sites")
+
+
+def cmd_send_alerts(a):
+    from app.alerts import send_alerts
+    with session_scope() as s:
+        out = send_alerts(s, dry_run=a.dry_run, to_override=[x.strip() for x in a.to.split(",")] if a.to else None)
+    print("nothing waiting (or no alert recipients)" if not out else f"{'DRY RUN ' if a.dry_run else ''}{out['subject']} -> {', '.join(out['to'])}")
 
 
 def cmd_link_location(a):
@@ -158,7 +142,7 @@ def cmd_add_recipient(a):
         r.set_editions(have)
         r.name = a.name or r.name
         r.active = True
-        r.brands = None if "all" in have else ";".join(sorted({b for e in have for b in {"il": ["WashU"], "tn": ["ICON", "WA"]}[e]}))
+        r.brands = None if "all" in have else ";".join(sorted({b for e in have for b in {"il": ["WashU"], "tn": ["ICON", "WA"], "alerts": []}[e]})) or None
         final = r.editions
     print(f"recipient {a.email} gets: {', '.join(final)}")
 
@@ -219,10 +203,12 @@ def main():
     sp.add_argument("--admin", action="store_true"); sp.add_argument("--password", help="omit to be prompted"); sp.set_defaults(fn=cmd_create_user)
     sub.add_parser("google-auth").set_defaults(fn=cmd_google_auth)
     sub.add_parser("discover-locations").set_defaults(fn=cmd_discover_locations)
+    sub.add_parser("discover-facebook").set_defaults(fn=cmd_discover_facebook)
+    sp = sub.add_parser("send-alerts", help="email waiting instant alerts now"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--to"); sp.set_defaults(fn=cmd_send_alerts)
     sp = sub.add_parser("link-location"); sp.add_argument("--source-id", type=int, required=True); sp.add_argument("--location-id", type=int, required=True); sp.set_defaults(fn=cmd_link_location)
     sp = sub.add_parser("backfill", help="full pull of all history"); sp.add_argument("--source"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=True))
     sp = sub.add_parser("sync", help="incremental pull"); sp.add_argument("--source"); sp.add_argument("--full", action="store_true"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=a.full))
-    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--edition", action="append", choices=["il", "tn", "all"], help="il = Illinois, tn = Tennessee, all = Corporate; repeat for several (default all)"); sp.add_argument("--remove", action="store_true", help="drop from the given editions (or from everything)"); sp.set_defaults(fn=cmd_add_recipient)
+    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--edition", action="append", choices=["il", "tn", "all", "alerts"], help="il = Illinois, tn = Tennessee, all = Corporate, alerts = instant alerts; repeat for several (default all)"); sp.add_argument("--remove", action="store_true", help="drop from the given editions (or from everything)"); sp.set_defaults(fn=cmd_add_recipient)
     sp = sub.add_parser("send-report"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--out", help="also write the HTML here"); sp.add_argument("--to", help="comma list, overrides stored recipients"); sp.add_argument("--edition", default="all", choices=["il", "tn", "all"], help="with --to: which edition to send"); sp.set_defaults(fn=cmd_send_report)
     sp = sub.add_parser("classify-negatives", help="AI-group negative reviews into workbook categories"); sp.add_argument("--range", default="last30"); sp.add_argument("--start"); sp.add_argument("--end"); sp.add_argument("--force", action="store_true", help="re-classify reviews that already have a category"); sp.set_defaults(fn=cmd_classify)
     sub.add_parser("worker").set_defaults(fn=cmd_worker)

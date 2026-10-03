@@ -2,8 +2,10 @@
 <div class="tabs">
   <a class="{% if active=='users' %}active{% endif %}" href="/admin/users">Users</a>
   <a class="{% if active=='recipients' %}active{% endif %}" href="/admin/recipients">Report recipients</a>
+  <a class="{% if active=='sites' %}active{% endif %}" href="/admin/sites">Sites &amp; listings</a>
   <a class="{% if active=='groups' %}active{% endif %}" href="/admin/groups">Site groups</a>
   <a class="{% if active=='employees' %}active{% endif %}" href="/admin/employees">Employees</a>
   <a class="{% if active=='ai' %}active{% endif %}" href="/admin/ai">AI rules</a>
+  <a class="{% if active=='api' %}active{% endif %}" href="/admin/api">API keys</a>
 </div>
 {% endmacro %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% from "_filters.html" import ms %}
+{% block content %}
+<div class="page-head"><a href="/reports">&larr; Reports</a><h1>Last week &amp; quarter to date</h1>
+  <span class="muted small">Last week {{ lw.start_date.strftime('%b %-d') }} – {{ lw.end_date.strftime('%b %-d') }} (Mon–Sun) · QTD {{ qtd.start_date.strftime('%b %-d') }} – {{ qtd.end_date.strftime('%b %-d') }}</span>
+  <span class="right small"><span class="muted">Export last week:</span> <a href="/export/distribution.csv?{{ lw.query() }}&{{ fq }}">CSV</a> · <a href="/export/distribution.xlsx?{{ lw.query() }}&{{ fq }}">Excel</a> <span class="muted">· QTD:</span> <a href="/export/distribution.xlsx?{{ qtd.query() }}&{{ fq }}">Excel</a></span></div>
+<form class="filters" method="get" action="/reports/weekly">
+  {{ ms('brand', 'All brands', brands|map('string')|list, brands_f, value_attr=None, label_attr=None) }}
+  {{ ms('group_id', 'All groups', groups, grp_f) }}
+  {{ ms('location_id', 'All sites', locations, loc_f, dot=True) }}
+  <span class="sep"></span>
+  <label class="inline small">As of <input type="date" name="as_of" value="{{ as_of }}" aria-label="As of date" onchange="this.form.requestSubmit()"></label>
+  <button class="ghost">Apply</button>
+  <span class="muted small" style="margin-left:auto">Pick an earlier date to see the week and quarter as they stood then.</span>
+</form>
+<div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Reviews by rating and site</h3>
+<table class="weekly"><thead><tr><th rowspan="2">Site</th><th colspan="7" class="grp">Last week</th><th colspan="7" class="grp qtd">Quarter to date</th></tr>
+<tr>{% for w in ['lw','q'] %}<th class="num">1★</th><th class="num">2★</th><th class="num">3★</th><th class="num">4★</th><th class="num">5★</th><th class="num">Total</th><th class="num">Avg</th>{% endfor %}</tr></thead><tbody>
+{% set ns = namespace(brand=None) %}
+{% for name in sites %}{% set b = brand_of.get(name, '?') %}{% if b != ns.brand %}{% set ns.brand = b %}<tr class="brand-row"><td colspan="15"><span class="dot {{ b }}"></span>{{ b }}</td></tr>{% endif %}
+{% set a = by_lw.get(name) %}{% set c = by_q.get(name) %}
+<tr><td data-sort="{{ name }}">{% if (a or c) and (a or c).location_id %}<a class="site-link" href="/sites/{{ (a or c).location_id }}?{{ lw.query() }}">{{ name }}</a>{% else %}{{ name }}{% endif %}</td>
+{% for row in [a, c] %}{% if row %}{% for x in row.counts %}<td class="num star-cell" {% if loop.index <= 3 and x %}style="color:var(--critical)"{% endif %}>{{ x or '' }}</td>{% endfor %}<td class="num"><strong>{{ row.total }}</strong></td><td class="num">{{ row.avg or '–' }}</td>{% else %}{% for i in range(5) %}<td class="num"></td>{% endfor %}<td class="num muted">0</td><td class="num muted">–</td>{% endif %}{% endfor %}</tr>{% endfor %}
+<tr style="font-weight:700"><td>All selected sites</td>{% for d in [dist_lw, dist_q] %}{% for x in d.totals %}<td class="num">{{ x }}</td>{% endfor %}<td class="num">{{ d.total }}</td><td class="num">{{ d.avg or '–' }}</td>{% endfor %}</tr>
+{% if not sites %}<tr><td colspan="15" class="muted" style="padding:24px;text-align:center">No reviews in either window for the selected sites.</td></tr>{% endif %}
+</tbody></table></div>
+
+<div class="grid two">
+{% for title, w in [('Negative review reasons · last week', w_lw), ('Negative review reasons · quarter to date', w_q)] %}
+<div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">{{ title }}</h3>
+{% if w.negatives %}<table><thead><tr><th>Site</th>{% for cat in themes_used %}<th class="num" title="{{ cat }}">{{ cat }}</th>{% endfor %}<th class="num">Total</th></tr></thead><tbody>
+{% for name in sites if w.theme_matrix.get(name) %}<tr><td>{{ name }}</td>{% for cat in themes_used %}{% set n = w.theme_matrix[name].get(cat, 0) %}<td class="num" {% if n %}style="color:var(--critical);font-weight:700"{% endif %}>{{ n or '' }}</td>{% endfor %}<td class="num"><strong>{{ w.theme_matrix[name].values()|sum }}</strong></td></tr>{% endfor %}
+<tr style="font-weight:700"><td>Total</td>{% for cat in themes_used %}<td class="num">{{ (w.themes|selectattr(0,'equalto',cat)|map(attribute=1)|list|first) or '' }}</td>{% endfor %}<td class="num">{{ w.negatives }}</td></tr></tbody></table>
+{% else %}<p class="muted small" style="padding:0 16px 14px">No negative reviews in this window.</p>{% endif %}</div>
+{% endfor %}
+</div>
+<p class="muted small">Negative = {{ settings.negative_rating_max }}★ or below. Reasons come from the AI classifier (or keywords when AI is off) and can be corrected on each review; rating-only negatives file under "No Content".</p>
+{% endblock %}

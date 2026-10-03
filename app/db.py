@@ -34,6 +34,15 @@ def init_db() -> None:
     from . import models  # noqa: F401  (registers models on Base)
     models.Base.metadata.create_all(engine)
     _add_missing_columns(models.Base)
+    _backfill()
+
+
+def _backfill() -> None:
+    """Idempotent data fixes that go with schema additions."""
+    with engine.begin() as conn:
+        # first_replied_at was added after replies existed; the platform reply time is the best estimate.
+        conn.execute(text("UPDATE reviews SET first_replied_at = owner_reply_updated_at "
+                          "WHERE first_replied_at IS NULL AND has_owner_reply = 1 AND owner_reply_updated_at IS NOT NULL"))
 
 
 def _add_missing_columns(base) -> None:

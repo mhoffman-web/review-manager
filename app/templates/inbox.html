@@ -1,8 +1,9 @@
 {% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import ms %}
 {% block content %}
-<div class="tabs">
-{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
+<div class="tabs" role="tablist">
+{% for key, label in views if key not in ['failed','archived','removed'] or counts.get(key) %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}" {% if key=='removed' %}title="Reviews that stopped appearing on Google: the reviewer deleted them or Google took them down"{% endif %}>{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
 {% if not counts.get('archived') %}<a href="/?view=archived" class="{% if view=='archived' %}active{% endif %} muted">Archived</a>{% endif %}
+<span class="hint muted small" title="Negative (≤{{ settings.negative_rating_max }}★) and unanswered, or unanswered for more than {{ settings.overdue_hours }} hours within the last 90 days. Oldest first, negatives on top.">ⓘ What counts as needing attention?</span>
 </div>
 {% if saved_views or user %}
 <div class="tabs saved">
@@ -10,12 +11,12 @@
   {% for v in saved_views %}<a href="/?sv={{ v.id }}" class="{% if active_view and active_view.id==v.id %}active{% endif %}" title="{% if v.is_shared %}Shared{% else %}Only you{% endif %}{% if v.owner %} · {{ v.owner.name }}{% endif %}">{{ v.name }}{% if not v.is_shared %} <span class="muted">·</span>{% endif %}</a>{% endfor %}
   <details class="inline-form"><summary class="chip">+ Save current filters</summary>
     <form method="post" action="/views" class="filters" style="margin-top:6px"><input type="hidden" name="params" value='{{ current_params_json }}'>
-      <input type="text" name="name" placeholder="View name, e.g. LW Negatives" required><label class="inline small"><input type="checkbox" name="is_shared" value="1" checked> share with team</label><button class="ghost">Save</button></form></details>
+      <input type="text" name="name" placeholder="View name, e.g. LW Negatives" aria-label="View name" required><label class="inline small"><input type="checkbox" name="is_shared" value="1" checked> share with team</label><button class="ghost">Save</button></form></details>
   {% if active_view and (active_view.owner_id==user.id or user.is_admin) %}<form method="post" action="/views/{{ active_view.id }}/delete" style="align-self:center" onsubmit="return confirm('Delete this saved view?')"><button class="ghost small">Delete view</button></form>{% endif %}
 </div>
 {% endif %}
-<form class="filters" method="get" action="/"><input type="hidden" name="view" value="{{ view }}">
-  <input type="search" name="q" value="{{ q }}" placeholder="Search review text or name">
+<form class="filters" method="get" action="/" role="search"><input type="hidden" name="view" value="{{ view }}">
+  <input type="search" name="q" id="q" value="{{ q }}" placeholder="Search review text or name" aria-label="Search review text or reviewer name">
   {{ ms('brand', 'All brands', brands|map('string')|list, brands_f, value_attr=None, label_attr=None) }}
   {{ ms('group_id', 'All groups', groups, grp_f) }}
   {{ ms('location_id', 'All sites', locations, loc_f, dot=True) }}
@@ -26,32 +27,102 @@
   {% if filtered %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
   <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if sort %} · sorted by {{ 'reviewer' if sort=='author' else sort }}{% elif view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
 </form>
-<div style="display:flex;gap:10px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">
+<div class="toolbar">
   <details class="inline-form"><summary class="chip">+ New site group</summary>
     <form class="popover" method="post" action="/groups"><input type="hidden" name="back" value="/?view={{ view }}">
-      <label class="small muted">Group name</label><input type="text" name="name" placeholder="e.g. Julia's sites" required style="width:100%;margin:4px 0 8px">
+      <label class="small muted" for="gname">Group name</label><input type="text" id="gname" name="name" placeholder="e.g. Julia's sites" required style="width:100%;margin:4px 0 8px">
       <div class="site-picks">{% for l in locations %}<label><input type="checkbox" name="location_ids" value="{{ l.id }}"> {{ l.name }}</label>{% endfor %}</div>
       <button class="primary small">Create group</button></form></details>
   <span class="muted small">Showing: {{ range_label(dr) }}</span>
+  <span class="right small"><span class="muted">Export this list:</span> <a href="/export/reviews.csv?{{ qs }}">CSV</a> · <a href="/export/reviews.xlsx?{{ qs }}">Excel</a></span>
 </div>
 <div class="card table-scroll" style="padding:0">
 {% macro sh(key, label) -%}{% set on = (sort == key) %}<th><a class="sort {% if on %}on{% endif %}" href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ key }}&dir={{ 'desc' if (on and dir == 'asc') else 'asc' }}">{{ label }} {% if on %}{{ '↑' if dir == 'asc' else '↓' }}{% else %}<span class="muted">↕</span>{% endif %}</a></th>{%- endmacro %}
-<table class="inbox" data-server-sort><thead><tr>{{ sh('rating','Rating') }}{{ sh('site','Site') }}<th>Review</th>{{ sh('author','Reviewer') }}{{ sh('created','Posted') }}<th>Our reply</th></tr></thead><tbody>
-{% for r in reviews %}
-<tr class="clickable" onclick="if(!event.target.closest('a,button,form'))location.href='/reviews/{{ r.id }}'">
-  <td style="white-space:nowrap">{{ source_icon(r) }} {{ stars(r) }}</td>
-  <td>{{ site(r) }}</td>
-  <td><a href="/reviews/{{ r.id }}" style="color:inherit"><div class="snippet">{% if r.is_rating_only %}<span class="muted">Rating only, no written review</span>{% else %}{{ r.text }}{% endif %}</div></a>{{ badges(r) }}</td>
-  <td class="ink2">{{ r.author_name or 'Anonymous' }}</td>
-  <td class="ink2" title="{{ r.created_at_source|local }}">{{ r.created_at_source|age }}</td>
-  <td class="reply-cell">{% if r.has_owner_reply %}<div class="snip">{{ r.owner_reply_text }}</div>{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}<div class="by">{% if last and last.created_by %}{{ last.created_by.name.split()[0] }} · {% endif %}{{ r.owner_reply_updated_at|local('%b %-d') }}{% if r.response_hours is not none %} · {{ r.response_hours|hours }} after review{% endif %}</div>
+<table class="inbox" data-server-sort id="inboxTable"><thead><tr>{{ sh('rating','Rating') }}{{ sh('site','Site') }}<th>Review</th>{{ sh('author','Reviewer') }}{{ sh('created','Posted') }}<th>Our reply</th></tr></thead><tbody>
+{% for r in reviews %}{% set open = not r.has_owner_reply and not r.is_archived and not r.is_deleted %}
+<tr class="clickable {% if r.rating_delta and r.rating_changed_at and r.rating_changed_at > changed_since %}{{ 'chg-up' if r.rating_delta > 0 else 'chg-down' }}{% endif %}{% if r.is_deleted %} removed{% endif %}" data-id="{{ r.id }}" data-href="/reviews/{{ r.id }}?ctx={{ ctx|urlencode }}" {% if open %}data-open="1"{% endif %} onclick="if(!event.target.closest('a,button,form,textarea,input'))location.href=this.dataset.href">
+  <td data-label="Rating" style="white-space:nowrap">{{ source_icon(r) }} {{ stars(r) }}</td>
+  <td data-label="Site">{{ site(r) }}</td>
+  <td data-label="Review"><a href="/reviews/{{ r.id }}?ctx={{ ctx|urlencode }}" style="color:inherit"><div class="snippet">{% if r.is_rating_only %}<span class="muted">Rating only, no written review</span>{% else %}{{ r.text }}{% endif %}</div></a>{{ badges(r) }}</td>
+  <td data-label="Reviewer" class="ink2">{{ r.author_name or 'Anonymous' }}</td>
+  <td data-label="Posted" class="ink2" title="{{ r.created_at_source|local }}">{% if r.is_deleted and r.removed_at %}gone {{ r.removed_at|age }}{% else %}{{ r.created_at_source|age }}{% endif %}</td>
+  <td data-label="Our reply" class="reply-cell" id="rc-{{ r.id }}">{% if r.has_owner_reply %}<div class="snip">{{ r.owner_reply_text }}</div>{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}<div class="by">{% if last and last.created_by %}{{ last.created_by.name.split()[0] }} · {% endif %}{{ r.owner_reply_updated_at|local('%b %-d') }}{% if r.response_hours is not none %} · {{ r.response_hours|hours }} after review{% endif %}{% if not r.is_deleted %} · <a href="/reviews/{{ r.id }}?ctx={{ ctx|urlencode }}#reply">Edit</a>{% endif %}</div>
+  {% elif r.is_deleted %}<span class="pill small">No reply possible</span>
   {% elif r.is_archived %}<span class="pill">Archived</span>
-  {% else %}<a class="cta {% if r.is_negative or r.created_at_source < overdue_cut %}urgent{% endif %}" href="/reviews/{{ r.id }}">Reply to review</a>{% if r.created_at_source < overdue_cut %}<span class="cta-note">waiting {{ r.created_at_source|age }}</span>{% endif %}{% endif %}</td>
+  {% else %}<button type="button" class="cta {% if r.is_negative or r.created_at_source < overdue_cut %}urgent{% endif %}" data-reply="{{ r.id }}" aria-expanded="false" aria-controls="cmp-{{ r.id }}">Reply</button>{% if r.created_at_source < overdue_cut %}<span class="cta-note">waiting {{ r.created_at_source|age }}</span>{% endif %}{% endif %}</td>
 </tr>
-{% else %}<tr><td colspan="6" class="muted" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='failed' %}No failed posts.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
+{% if open %}<tr class="composer-row" id="cmp-{{ r.id }}" data-for="{{ r.id }}" hidden><td colspan="6">
+  <div class="composer" data-id="{{ r.id }}">
+    <div class="composer-head"><strong>Reply to {{ r.author_name or 'this review' }}</strong> <span class="muted small">· {{ r.location.name if r.location else '' }}{% if r.mention_names %} · names: {{ r.mention_names|join(', ') }}{% endif %}</span>
+      <span class="right"><a class="small" href="/reviews/{{ r.id }}?ctx={{ ctx|urlencode }}">Open full page</a></span></div>
+    <div class="chips">{% for t in inline.get(r.id, []) %}<button type="button" class="chip {% if t.suggested %}suggested{% endif %}" data-chip data-body="{{ t.body }}" data-tpl="{{ t.id }}" title="Press {{ loop.index }} to insert">{% if t.suggested %}★ {% endif %}{{ loop.index }} · {{ t.name }}</button>{% endfor %}
+      {% if ai_enabled %}<button type="button" class="chip" data-draft>✦ Draft with AI</button>{% endif %}</div>
+    <textarea name="text" rows="3" maxlength="4096" placeholder="Hi {{ r.first_name }}, thanks for ..." aria-label="Reply text"></textarea>
+    <div class="warn-box" hidden></div>
+    <div class="composer-foot"><button type="button" class="primary small" data-post>Post reply</button><button type="button" class="ghost small" data-post-next>Post &amp; next</button><button type="button" class="ghost small" data-cancel>Cancel</button>
+      <span class="right"><span class="cc">0</span> / 4096 · ⌘↵ posts · <span class="st muted"></span></span></div>
+  </div></td></tr>{% endif %}
+{% else %}<tr><td colspan="6" class="muted empty" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='failed' %}No failed posts.{% elif view=='removed' %}No reviews have disappeared from Google.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 </div>
 <div class="pager">{% if page>1 %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ sort }}&dir={{ dir }}&page={{ page-1 }}">&larr; Previous</a>{% endif %}
 <span class="muted small">Page {{ page }} of {{ ((total-1)//per_page)+1 if total else 1 }}</span>
 {% if page*per_page < total %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ sort }}&dir={{ dir }}&page={{ page+1 }}">Next &rarr;</a>{% endif %}</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// Inline composer: reply without leaving the list. Posts via fetch; guardrail warnings come back first.
+window.RMinbox = (function () {
+  var openId = null;
+  function row(id) { return document.querySelector('tr.clickable[data-id="' + id + '"]'); }
+  function cmp(id) { return document.getElementById('cmp-' + id); }
+  function close() { if (openId == null) return; var c = cmp(openId); if (c) { c.hidden = true; } var b = document.querySelector('[data-reply="' + openId + '"]'); if (b) b.setAttribute('aria-expanded', 'false'); openId = null; }
+  function open(id) {
+    var c = cmp(id); if (!c) { var r = row(id); if (r) location.href = r.dataset.href; return; }
+    if (openId != null && openId != id) close();
+    c.hidden = false; openId = id;
+    var b = document.querySelector('[data-reply="' + id + '"]'); if (b) b.setAttribute('aria-expanded', 'true');
+    var ta = c.querySelector('textarea'); ta.focus(); c.scrollIntoView({ block: 'nearest' });
+  }
+  function nextOpen(afterId) { var rows = [].slice.call(document.querySelectorAll('tr.clickable[data-open="1"]')); var ids = rows.map(function (r) { return r.dataset.id; }); var i = ids.indexOf(String(afterId)); return ids[i + 1] || null; }
+  function chip(n) { if (openId == null) return; var chips = cmp(openId).querySelectorAll('[data-chip]'); var b = chips[n - 1]; if (b) b.click(); }
+  function archive(id) {
+    fetch('/reviews/' + id + '/archive', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) return; var r = row(id); if (r) { var c = cmp(id); if (c) c.remove(); r.remove(); }
+      RMtoast.show(j.msg, { undo: j.undo });
+    }).catch(function () { RMtoast.show('Could not archive', { error: true }); });
+  }
+  function post(id, goNext, force) {
+    var c = cmp(id), ta = c.querySelector('textarea'), st = c.querySelector('.st'), wb = c.querySelector('.warn-box');
+    var text = ta.value.trim(); if (!text) { ta.focus(); return; }
+    var fd = new FormData(); fd.append('text', text); fd.append('template_id', c.dataset.tplId || '0'); fd.append('ai_generated', c.dataset.aiFlag || '0'); fd.append('force', force ? '1' : '0'); fd.append('go_next', goNext ? '1' : '0');
+    st.textContent = 'Posting…'; c.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    fetch('/reviews/' + id + '/reply', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }).then(function (j) {
+      c.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+      if (j.warnings) { wb.hidden = false; wb.innerHTML = '<strong>Before this goes public:</strong><ul>' + j.warnings.map(function (w) { return '<li>' + w.replace(/</g, '&lt;') + '</li>'; }).join('') + '</ul><button type="button" class="ghost small" data-force>Post anyway</button> <button type="button" class="ghost small" data-fix>Edit first</button>'; st.textContent = ''; return; }
+      if (!j.ok) { st.textContent = j.error || j.msg || 'Failed'; RMtoast.show(j.error || j.msg || 'Posting failed', { error: true }); return; }
+      var cell = document.getElementById('rc-' + id); var r = row(id);
+      cell.innerHTML = '<div class="snip"></div><div class="by"></div>'; cell.querySelector('.snip').textContent = j.reply.text; cell.querySelector('.by').textContent = j.reply.by + ' · ' + j.reply.when + (j.reply.hours ? ' · ' + j.reply.hours + ' after review' : '');
+      if (r) { r.removeAttribute('data-open'); r.classList.add('just-replied'); }
+      var nx = goNext ? nextOpen(id) : null; close(); c.remove();
+      RMtoast.show(j.msg); if (nx) open(nx);
+    }).catch(function () { c.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); st.textContent = 'Network error'; });
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-reply]'); if (t) { e.preventDefault(); e.stopPropagation(); if (openId == t.dataset.reply) close(); else open(t.dataset.reply); return; }
+    var c = e.target.closest('.composer'); if (!c) return;
+    var id = c.dataset.id, ta = c.querySelector('textarea');
+    if (e.target.closest('[data-chip]')) { var b = e.target.closest('[data-chip]'); if (ta.value.trim() && !confirm('Replace the current draft with this template?')) return; ta.value = b.dataset.body; c.dataset.tplId = b.dataset.tpl; c.dataset.aiFlag = '0'; c.querySelector('.cc').textContent = ta.value.length; ta.focus(); }
+    else if (e.target.closest('[data-draft]')) { var st = c.querySelector('.st'); st.textContent = 'Drafting…'; fetch('/reviews/' + id + '/draft', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) { if (j.ok) { ta.value = j.text; c.dataset.aiFlag = '1'; c.dataset.tplId = '0'; c.querySelector('.cc').textContent = ta.value.length; st.textContent = 'Draft ready. Read it before posting.'; } else { st.textContent = j.error || 'Drafting failed'; } }).catch(function () { st.textContent = 'Drafting failed'; }); }
+    else if (e.target.closest('[data-post]')) post(id, false, false);
+    else if (e.target.closest('[data-post-next]')) post(id, true, false);
+    else if (e.target.closest('[data-force]')) post(id, false, true);
+    else if (e.target.closest('[data-fix]')) { c.querySelector('.warn-box').hidden = true; ta.focus(); }
+    else if (e.target.closest('[data-cancel]')) close();
+  });
+  document.addEventListener('input', function (e) { var c = e.target.closest('.composer'); if (c && e.target.tagName === 'TEXTAREA') { c.querySelector('.cc').textContent = e.target.value.length; c.dataset.tplId = '0'; c.dataset.aiFlag = '0'; } });
+  document.addEventListener('keydown', function (e) { var c = e.target.closest && e.target.closest('.composer'); if (c && (e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); post(c.dataset.id, false, false); } });
+  return { open: open, close: close, chip: chip, archive: archive, isOpen: function () { return openId != null; } };
+})();
+</script>
 {% endblock %}

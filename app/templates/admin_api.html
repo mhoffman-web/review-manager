@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% block content %}{{ admin_tabs('api') }}
+{% if new_key %}<div class="msg ok"><strong>New key created.</strong> Copy it now; it is not shown again.<div style="margin-top:6px"><code id="newKey" style="font-size:13px;user-select:all">{{ new_key }}</code> <button type="button" class="ghost small" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('newKey').textContent).then(function(){this.textContent='Copied'}.bind(this))">Copy</button></div></div>{% endif %}
+<div class="grid side">
+<div>
+  <div class="card table-scroll" style="padding:0"><table><thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
+  {% for k in keys %}<tr style="{% if not k.active %}opacity:.55{% endif %}"><td>{{ k.name }}{% if not k.active %} <span class="pill small">revoked</span>{% endif %}</td><td class="muted"><code>{{ k.prefix }}…</code></td><td class="ink2">{{ k.created_at|local('%b %-d, %Y') }}{% if k.created_by %} · {{ k.created_by.name.split()[0] }}{% endif %}</td><td class="ink2">{{ k.last_used_at|local if k.last_used_at else 'never' }}</td>
+    <td>{% if k.active %}<form method="post" action="/admin/api/{{ k.id }}/revoke" onsubmit="return confirm('Revoke this key? Anything using it stops working.')"><button class="ghost small">Revoke</button></form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="5" class="muted" style="padding:24px;text-align:center">No API keys yet.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="card"><h3>Endpoints</h3>
+    <p class="small muted">Read-only JSON. Send the key as <code>X-API-Key</code> (or <code>Authorization: Bearer</code>). Filters on every call: <code>range</code> (today, yesterday, last7, last30, this_week, last_week, this_month, last_month, this_quarter, ytd, or custom with start/end), <code>brand</code>, <code>location_id</code>, <code>group_id</code>. Browser calls allowed from: {{ cors|join(', ') or 'none configured' }}.</p>
+    <table style="font-size:13px"><tbody>
+      <tr><td><code>GET {{ base }}/api/v1/sites</code></td><td>Every active site with Google's own rating and count.</td></tr>
+      <tr><td><code>GET {{ base }}/api/v1/summary?range=this_month</code></td><td>KPIs for the window: reviews, average, 1–5★ distribution, negatives, response rate, median response hours, recovered ratings, negative reasons; in total and per site.</td></tr>
+      <tr><td><code>GET {{ base }}/api/v1/reviews?range=last7&amp;location_id=3</code></td><td>Individual reviews newest first (limit up to 500; <code>include_text=0</code> for ratings only).</td></tr>
+      <tr><td><code>GET {{ base }}/api/v1/leaderboard?range=this_month</code></td><td>Employees named in reviews, most-mentioned first.</td></tr>
+    </tbody></table>
+    <pre class="small" style="background:var(--sunken);padding:10px;border-radius:8px;overflow:auto">curl -H "X-API-Key: rm_…" "{{ base }}/api/v1/summary?range=this_month&amp;brand=WashU"</pre></div>
+</div>
+<div><div class="card"><h3>Create a key</h3>
+  <form method="post" action="/admin/api"><input type="text" name="name" placeholder="What uses it, e.g. Teams Portal" required style="width:100%;margin-bottom:8px"><button class="primary small">Create key</button></form>
+  <p class="muted small" style="margin:10px 0 0">Keys are read-only. Revoke and re-create to rotate.</p></div></div>
+</div>
+{% endblock %}

@@ -11,12 +11,12 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .config import EDITIONS, settings
 from .daterange import DateRange, resolve_range
-from .models import Employee, Location, ReportRecipient, ReportSend, Response, Review, ReviewMention, ReviewSourceLink, User
+from .models import Employee, Location, ReportRecipient, ReportSend, Response, Review, ReviewEvent, ReviewMention, ReviewSourceLink, User
 from .text_intel import THEMES
 
 log = logging.getLogger(__name__)
@@ -260,11 +260,64 @@ def _window_reviews(session: Session, dr: DateRange, brands: Optional[List[str]]
          .where(Review.is_deleted.is_(False), ReviewSourceLink.active.is_(True),
                 Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
          .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location), selectinload(Review.mentions)))
+    if settings.exclude_disputed:
+        # Reviews we have reported to the platform and are waiting on stay out of the numbers until
+        # the platform decides (kept -> counted again; removed -> gone anyway).
+        q = q.where(or_(Review.report_status.is_(None), Review.report_status != "reported"))
     if brands:
         q = q.where(Location.brand.in_(brands))
     if location_ids:
         q = q.where(Location.id.in_(location_ids))
     return list(session.execute(q).scalars().all())
+
+
+def disputed_count(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> int:
+    """How many reviews in the window are left out of the figures because a report is pending."""
+    q = (select(func.count()).select_from(Review).join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
+         .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
+         .where(Review.is_deleted.is_(False), ReviewSourceLink.active.is_(True), Review.report_status == "reported",
+                Review.created_at_source >= dr.start, Review.created_at_source < dr.end))
+    if brands:
+        q = q.where(Location.brand.in_(brands))
+    if location_ids:
+        q = q.where(Location.id.in_(location_ids))
+    return session.execute(q).scalar() or 0
+
+
+def recovery_stats(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    """Rating changes the reviewer made in the window. 'Recovered' = raised after we had replied."""
+    evs = session.execute(
+        select(ReviewEvent).where(ReviewEvent.kind == "rating_changed", ReviewEvent.at >= dr.start, ReviewEvent.at < dr.end)
+        .options(selectinload(ReviewEvent.review).selectinload(Review.source_link).selectinload(ReviewSourceLink.location),
+                 selectinload(ReviewEvent.review).selectinload(Review.responses).selectinload(Response.created_by))
+        .order_by(ReviewEvent.at.desc())).scalars().all()
+    out: Dict[str, Any] = {"improved": 0, "worsened": 0, "recovered": 0, "by_site": {}, "by_responder": Counter(), "events": []}
+    for e in evs:
+        r = e.review
+        loc = r.location if r else None
+        if brands and (not loc or loc.brand not in brands):
+            continue
+        if location_ids and (not loc or loc.id not in location_ids):
+            continue
+        d = e.detail
+        try:
+            frm, to = int(d.get("from")), int(d.get("to"))
+        except (TypeError, ValueError):
+            continue
+        site = out["by_site"].setdefault(_site_name(r), {"name": _site_name(r), "brand": loc.brand if loc else "?", "location_id": loc.id if loc else None,
+                                                          "improved": 0, "worsened": 0, "recovered": 0})
+        kind = "improved" if to > frm else "worsened"
+        out[kind] += 1
+        site[kind] += 1
+        recovered = kind == "improved" and r.first_replied_at is not None and r.first_replied_at < e.at
+        if recovered:
+            out["recovered"] += 1
+            site["recovered"] += 1
+            last = [x for x in r.responses if x.status == "posted" and x.posted_at and x.posted_at < e.at]
+            who = last[-1].created_by.name if last and last[-1].created_by else "Replied outside the app"
+            out["by_responder"][who] += 1
+        out["events"].append({"review": r, "from": frm, "to": to, "at": e.at, "recovered": recovered, "site": _site_name(r)})
+    return out
 
 
 def window_report(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None,
@@ -633,8 +686,18 @@ def digest_subject(d: Digest) -> str:
 
 
 # ----------------------------------------------------------------------------- rating distribution by site
+def listing_summaries(session: Session) -> Dict[int, Dict[str, Any]]:
+    """What the platform itself shows for each site (all-time average and count), keyed by location id."""
+    out: Dict[int, Dict[str, Any]] = {}
+    for l in session.execute(select(ReviewSourceLink).where(ReviewSourceLink.active.is_(True))).scalars().all():
+        if l.location_id and l.avg_rating is not None:
+            out[l.location_id] = {"avg": l.avg_rating, "total": l.total_review_count, "source": l.source}
+    return out
+
+
 def rating_distribution(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
     rows: Dict[str, Dict[str, Any]] = {}
+    listing = listing_summaries(session)
     for r in _window_reviews(session, dr, brands, location_ids):
         name = _site_name(r)
         row = rows.setdefault(name, {"name": name, "brand": r.location.brand if r.location else "?", "location_id": r.location.id if r.location else None,
@@ -651,6 +714,8 @@ def rating_distribution(session: Session, dr: DateRange, brands: Optional[List[s
         row["avg"] = round(sum((i + 1) * c for i, c in enumerate(row["counts"])) / n, 2) if n else None
         row["pct"] = [round(100.0 * c / n, 1) if n else 0 for c in row["counts"]]
         row["neg_pct"] = round(100.0 * sum(row["counts"][:settings.negative_rating_max]) / n, 1) if n else 0
+        ls = listing.get(row["location_id"]) if row["location_id"] else None
+        row["listing_avg"], row["listing_total"] = (ls["avg"], ls["total"]) if ls else (None, None)
         for i in range(5):
             totals[i] += row["counts"][i]
         out.append(row)

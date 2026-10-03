@@ -15,8 +15,37 @@ from .db import get_db
 from .models import User
 
 COOKIE_NAME = "rm_session"
-SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14 days
+SESSION_MAX_AGE = max(1, settings.session_hours) * 3600   # idle timeout; the cookie is re-issued on activity
+RENEW_AFTER = 3600                                        # re-issue at most hourly
 _serializer = URLSafeTimedSerializer(settings.secret_key, salt="review-manager-session")
+
+# ---- login throttling (per email and per client address, in-process)
+import time as _time
+from collections import defaultdict as _dd
+LOGIN_WINDOW = 15 * 60
+_failures: "dict[str, list[float]]" = _dd(list)
+
+
+def login_blocked(*keys: str) -> int:
+    """Seconds until another attempt is allowed, 0 when not blocked."""
+    now = _time.time()
+    worst = 0
+    for k in keys:
+        stamps = [t for t in _failures.get(k, []) if now - t < LOGIN_WINDOW]
+        _failures[k] = stamps
+        if len(stamps) >= settings.login_max_attempts:
+            worst = max(worst, int(LOGIN_WINDOW - (now - stamps[0])) + 1)
+    return worst
+
+
+def note_login_failure(*keys: str) -> None:
+    for k in keys:
+        _failures[k].append(_time.time())
+
+
+def clear_login_failures(*keys: str) -> None:
+    for k in keys:
+        _failures.pop(k, None)
 
 
 def hash_password(password: str) -> str:
@@ -46,20 +75,31 @@ def make_session_cookie(user: User) -> str:
 
 
 def read_session_cookie(value: Optional[str]) -> Optional[int]:
+    uid, _issued = read_session(value)
+    return uid
+
+
+def read_session(value: Optional[str]):
+    """(user id, issued-at datetime) or (None, None) for a missing, forged or expired cookie."""
     if not value:
-        return None
+        return None, None
     try:
-        return _serializer.loads(value, max_age=SESSION_MAX_AGE).get("uid")
+        data, ts = _serializer.loads(value, max_age=SESSION_MAX_AGE, return_timestamp=True)
+        return data.get("uid"), ts
     except BadSignature:
-        return None
+        return None, None
 
 
 def current_user_optional(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
-    uid = read_session_cookie(request.cookies.get(COOKIE_NAME))
+    uid, issued = read_session(request.cookies.get(COOKIE_NAME))
     if uid is None:
         return None
     user = db.get(User, uid)
-    return user if (user and user.active) else None
+    if not (user and user.active):
+        return None
+    if issued is not None and (datetime.now(issued.tzinfo) - issued).total_seconds() > RENEW_AFTER:
+        request.state.renew_session_uid = user.id      # web.py middleware re-issues the cookie
+    return user
 
 
 def current_user(user: Optional[User] = Depends(current_user_optional)) -> User:

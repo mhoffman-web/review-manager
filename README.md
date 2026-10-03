@@ -44,6 +44,30 @@ review_manager/
   Tennessee (ICON + Wash Associates) and Corporate (everything, grouped by
   brand). Admin → Report recipients has a paste box per edition; one address can
   be on several editions. Preview at `/reports/morning?edition=il|tn|all`.
+* **Reply from the list** – an inline composer on each inbox row with the top
+  template suggestions, Post / Post & next, and guardrails that warn before a
+  reply with an unfilled placeholder, the wrong first name, or text already
+  posted several times that day goes public. Prev/next on the review page follow
+  the exact list you came from. Edits keep the original response time.
+* **Change tracking** – rating changes are highlighted (red if lowered, blue if
+  raised, "was 4★ → 2★"), reviews that vanish from Google land in a Removed view
+  with their last known text, and every review has an activity timeline.
+  "Recovered" on Reports counts ratings raised after our reply.
+* **Instant alerts** – the Alerts recipient list is emailed minutes after the
+  sync that finds a new 1–3★ review, a review that disappeared, or a listing
+  failing three syncs in a row. A full re-pull runs once a day to catch removals.
+* **Report to Google** – opens Google's review tool with the details copied,
+  records the report (disputed badge) and its outcome; disputed reviews stay out
+  of averages until Google decides.
+* **Last week & QTD** (`/reports/weekly`) – Mon–Sun last week and quarter to
+  date side by side: reviews by rating per site and negative reasons per site,
+  for any as-of date.
+* **Exports** – CSV / Excel of any inbox list and of the distribution report.
+* **Read-only API** (`/api/v1/…`) for the Teams Portal and other screens, keyed
+  from Admin → API keys. See §9.
+* **Admin → Sites & listings** – add a site, discover its Google Business Profile
+  (or Facebook page), map unmapped listings, or record a listing by id.
+* **Keyboard shortcuts** (press `?`), phone layout, print stylesheet, add-to-home-screen manifest.
 * **Rating distribution report** (`/reports/distribution`) – reviews by star
   rating per site for any window, stacked bars plus a table, filtered by brand,
   group and site.
@@ -174,6 +198,30 @@ in `report_sends` so a restart never double-sends.
 The live equivalent is `/reports`, and `/reports/morning` shows exactly what
 the email looks like.
 
+## 3b. Instant alerts and the alerts list
+
+Admin → Report recipients has a fourth column, **Instant alerts**. Addresses on it
+get one email per sync run that found something: new negative reviews (first seen
+in the last 36 hours, posted in the last 14 days, so a backfill never floods
+anyone), reviews that stopped appearing on Google (the reviewer deleted them or
+Google took them down; the last known version is kept), and listings that failed
+`ALERT_FAIL_THRESHOLD` syncs in a row. Nothing is stamped as sent until a
+recipient exists, so alerts start flowing the moment someone is added.
+`python cli.py send-alerts --dry-run` shows what is waiting. Removals are only
+detectable on a full pull, so the worker does one per day after
+`FULL_SYNC_HOUR_LOCAL` (default 3 AM).
+
+## 3c. Second source: Facebook
+
+`app/sources/facebook.py` reads Page recommendations through the Graph API. Set
+`FACEBOOK_ACCESS_TOKEN` to a long-lived System User token (Business Manager) with
+`pages_read_user_content`, `pages_read_engagement` and `pages_manage_engagement`
+on each brand page, then `python cli.py discover-facebook` (or Admin → Sites →
+Discover Facebook pages) and map the pages to sites. A recommendation without a
+star rating is stored as 5 (recommends) or 1 (does not recommend) so the inbox
+and reports stay single-scale; the raw payload keeps the real type. Replies post
+as the Page's comment on the recommendation.
+
 ## 4. Running it for real
 
 Two processes, one database:
@@ -292,3 +340,30 @@ fill them in once those stores are on Sonny's and flowing into the share.
   ```bash
   cd "~/Desktop/Snowflake & Claude/review_manager" && .venv/bin/python cli.py web --reload
   ```
+
+## 9. Read-only API (Teams Portal)
+
+Create a key under Admin → API keys (shown once). Every call takes
+`X-API-Key: <key>` (or `Authorization: Bearer <key>`), and the same filters:
+`range` (today, yesterday, last7, last30, this_week, last_week, this_month,
+last_month, this_quarter, last_quarter, ytd, last12m, or `custom` with
+`start`/`end`), `brand`, `location_id`, `group_id` (all repeatable).
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/sites` | active sites with Google's displayed rating and count |
+| `GET /api/v1/summary?range=this_month` | reviews, average, 1–5★ distribution, negatives, response rate, median response hours, recovered ratings, negative reasons; totals and per site |
+| `GET /api/v1/reviews?range=last7&location_id=3` | individual reviews, newest first (`limit` ≤ 500, `include_text=0` for ratings only) |
+| `GET /api/v1/leaderboard?range=this_month` | employees named in reviews |
+
+Browser calls are allowed from the origins in `API_CORS_ORIGINS` (default
+`https://chris-stacks.washucarwash.com`). Keys are read-only; revoke and
+re-create to rotate. Errors come back as JSON with `status` 401 (no key) or 403
+(revoked/unknown).
+
+## 10. Sessions and login
+
+Sessions expire after `SESSION_HOURS` (default 12) without activity and are
+renewed while the app is in use. Password login locks an email or address for
+15 minutes after `LOGIN_MAX_ATTEMPTS` failures; set `PASSWORD_LOGIN_ENABLED=false`
+once Microsoft sign-in is proven.

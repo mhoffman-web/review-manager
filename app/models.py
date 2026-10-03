@@ -62,9 +62,23 @@ class ReviewSourceLink(Base):
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     last_sync_status: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Sync health: consecutive failures, the last error text, and when we last emailed about it.
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    failure_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Source-specific extras as JSON (e.g. the Facebook page id); never secrets.
+    extra_json: Mapped[Optional[str]] = mapped_column(Text)
 
     location: Mapped[Optional[Location]] = relationship(back_populates="sources")
     reviews: Mapped[List["Review"]] = relationship(back_populates="source_link")
+
+    @property
+    def extra(self) -> dict:
+        import json
+        try:
+            return json.loads(self.extra_json or "{}")
+        except ValueError:
+            return {}
 
 
 class Review(Base):
@@ -111,10 +125,46 @@ class Review(Base):
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     archived_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
 
+    # When our FIRST reply went up. Editing a reply later moves owner_reply_updated_at
+    # on the platform but must not move the response time, so metrics use this.
+    first_replied_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # The reviewer changed the star rating after posting: what it was, and when we noticed.
+    prev_rating: Mapped[Optional[int]] = mapped_column(Integer)
+    rating_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # The review stopped coming back from the platform (reviewer deleted it or Google took it down).
+    removed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    removal_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Instant alert for a new negative review was sent.
+    alerted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # We reported it to the platform for removal: None / reported / removed / kept.
+    report_status: Mapped[Optional[str]] = mapped_column(String(20))
+    reported_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    reported_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    report_note: Mapped[Optional[str]] = mapped_column(Text)
+    # Where the theme came from: keyword / ai / manual. Manual wins and is never overwritten.
+    category_source: Mapped[Optional[str]] = mapped_column(String(10))
+
     source_link: Mapped[ReviewSourceLink] = relationship(back_populates="reviews")
     responses: Mapped[List["Response"]] = relationship(back_populates="review", order_by="Response.created_at")
     assigned_to: Mapped[Optional["User"]] = relationship(foreign_keys=[assigned_to_id])
     mentions: Mapped[List["ReviewMention"]] = relationship(back_populates="review", cascade="all, delete-orphan")
+    events: Mapped[List["ReviewEvent"]] = relationship(back_populates="review", cascade="all, delete-orphan", order_by="ReviewEvent.at")
+    reported_by: Mapped[Optional["User"]] = relationship(foreign_keys=[reported_by_id])
+
+    @property
+    def rating_delta(self) -> Optional[int]:
+        """+n if the reviewer raised the rating, -n if they lowered it, None if unchanged."""
+        if self.prev_rating is None or self.rating is None or self.rating == self.prev_rating:
+            return None
+        return self.rating - self.prev_rating
+
+    @property
+    def is_disputed(self) -> bool:
+        return self.report_status == "reported"
+
+    @property
+    def replied_at(self) -> Optional[datetime]:
+        return self.first_replied_at or self.owner_reply_updated_at
 
     @property
     def is_rating_only(self) -> bool:
@@ -130,8 +180,9 @@ class Review(Base):
 
     @property
     def response_hours(self) -> Optional[float]:
-        if self.has_owner_reply and self.owner_reply_updated_at and self.created_at_source:
-            return max(0.0, (self.owner_reply_updated_at - self.created_at_source).total_seconds() / 3600)
+        at = self.replied_at
+        if self.has_owner_reply and at and self.created_at_source:
+            return max(0.0, (at - self.created_at_source).total_seconds() / 3600)
         return None
 
     @property
@@ -167,6 +218,44 @@ class Response(Base):
 
     review: Mapped[Review] = relationship(back_populates="responses")
     created_by: Mapped[Optional["User"]] = relationship()
+
+
+class ReviewEvent(Base):
+    """Activity timeline: everything that happened to a review, by whom, when.
+    `actor_id` is None for things the sync noticed (rating changed, removed)."""
+    __tablename__ = "review_events"
+    __table_args__ = (Index("ix_review_events_review", "review_id", "at"), Index("ix_review_events_kind", "kind", "at"))
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    review_id: Mapped[int] = mapped_column(ForeignKey("reviews.id"))
+    kind: Mapped[str] = mapped_column(String(30))
+    actor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    detail_json: Mapped[Optional[str]] = mapped_column(Text)
+
+    review: Mapped["Review"] = relationship(back_populates="events")
+    actor: Mapped[Optional["User"]] = relationship()
+
+    @property
+    def detail(self) -> dict:
+        import json
+        try:
+            return json.loads(self.detail_json or "{}")
+        except ValueError:
+            return {}
+
+    LABELS = {
+        "reply_posted": "Reply posted", "reply_edited": "Reply edited", "reply_deleted": "Reply removed", "reply_failed": "Reply failed to post",
+        "archived": "Archived", "unarchived": "Restored to inbox", "note_saved": "Internal note saved", "category_changed": "Theme changed",
+        "mention_added": "Employee tagged", "mention_removed": "Employee tag removed", "rating_changed": "Reviewer changed the rating",
+        "text_changed": "Reviewer edited the text", "removed": "No longer on the platform", "restored": "Back on the platform",
+        "reported": "Reported for removal", "report_outcome": "Report outcome recorded", "alert_sent": "Alert emailed",
+        "assigned": "Assigned", "unassigned": "Unassigned",
+    }
+
+    @property
+    def label(self) -> str:
+        return self.LABELS.get(self.kind, self.kind.replace("_", " ").capitalize())
 
 
 class SyncRun(Base):
@@ -213,7 +302,7 @@ class ReportRecipient(Base):
     email: Mapped[str] = mapped_column(String(200), unique=True)
     name: Mapped[Optional[str]] = mapped_column(String(120))
     brands: Mapped[Optional[str]] = mapped_column(String(120))      # legacy; edition is what the digest uses now
-    edition: Mapped[str] = mapped_column(String(10), default="all")  # "il", "tn", "all" or a ";" list of them
+    edition: Mapped[str] = mapped_column(String(40), default="all")  # "il", "tn", "all", "alerts" or a ";" list of them
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     def brand_list(self) -> List[str]:
@@ -228,7 +317,7 @@ class ReportRecipient(Base):
 
     def set_editions(self, eds) -> None:
         wanted = set(eds)
-        self.edition = ";".join(e for e in ("il", "tn", "all") if e in wanted)
+        self.edition = ";".join(e for e in ("il", "tn", "all", "alerts") if e in wanted)
 
 
 class ReportSend(Base):
@@ -385,3 +474,20 @@ class AiRule(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=100)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ApiKey(Base):
+    """Read-only API access for other systems (e.g. the Teams Portal). Only a hash is stored;
+    the full key is shown once when created."""
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    prefix: Mapped[str] = mapped_column(String(12))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_by: Mapped[Optional["User"]] = relationship()
