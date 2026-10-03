@@ -30,14 +30,18 @@ from .text_intel import apply_intel, suggest_templates
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 
-app = FastAPI(title="Review Manager", docs_url=None, redoc_url=None)
-app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+from contextlib import asynccontextmanager
 
 
-@app.on_event("startup")
-def _ensure_schema() -> None:
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
     from .db import init_db
-    init_db()
+    init_db()          # create tables / add new columns before serving
+    yield
+
+
+app = FastAPI(title="Review Manager", docs_url=None, redoc_url=None, lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 _tz = ZoneInfo(settings.timezone)
@@ -116,7 +120,8 @@ def _nav_counts(db: Session) -> dict:
 
 def _render(request: Request, name: str, user: Optional[User], db: Optional[Session] = None, **ctx) -> HTMLResponse:
     ctx.update({"request": request, "user": user, "nav": _nav_counts(db) if (db is not None and user) else {}})
-    return templates.TemplateResponse(name, ctx)
+    # Modern Starlette signature (request first); the legacy (name, context) form was removed in Starlette 0.50.
+    return templates.TemplateResponse(request, name, ctx)
 
 
 def _brands(db: Session) -> List[str]:
