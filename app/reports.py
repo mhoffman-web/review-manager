@@ -423,8 +423,22 @@ def _bucket_labels(dr: DateRange, gran: str) -> list:
     return out
 
 
-def build_trends(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
-    gran = dr.granularity
+UNITS = ("day", "week", "month")
+
+
+def pick_granularity(dr: DateRange, unit: Optional[str] = None) -> str:
+    """Honour an explicit unit, except where it would mean hundreds of points; otherwise the window's default."""
+    gran = unit if unit in UNITS else dr.granularity
+    if gran == "day" and dr.days > 120:
+        gran = "week"
+    if gran == "week" and dr.days > 1100:
+        gran = "month"
+    return gran
+
+
+def build_trends(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None,
+                 unit: Optional[str] = None) -> Dict[str, Any]:
+    gran = pick_granularity(dr, unit)
     reviews = _window_reviews(session, dr, brands, location_ids)
     labels = _bucket_labels(dr, gran)
     idx = {b: i for i, b in enumerate(labels)}
@@ -456,6 +470,8 @@ def build_trends(session: Session, dr: DateRange, brands: Optional[List[str]] = 
     fmt = {"day": "%b %-d", "week": "%b %-d", "month": "%b %Y"}[gran]
     return {
         "granularity": gran,
+        "unit": unit if unit in UNITS else "auto",
+        "units": [u for u in UNITS if pick_granularity(dr, u) == u],   # units that make sense for this window
         "labels": [d.strftime(fmt) for d in labels],
         "brands": present,
         "colors": {b: BRAND_COLORS.get(b, {"light": "#52514e", "dark": "#c3c2b7"}) for b in present},

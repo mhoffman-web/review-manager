@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_fields, range_label %}
+{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
 <div class="page-head"><a href="/reports">&larr; Reports</a><h1><span class="dot {{ loc.brand }}"></span>{{ loc.name }}</h1><span class="muted">{{ loc.city }}, {{ loc.state }}{% set link = (loc.sources|selectattr('active')|list|first) %}{% if link and link.listing_url %} · <a href="{{ link.listing_url }}" target="_blank" rel="noopener">Maps listing</a>{% endif %}</span>
@@ -14,8 +14,9 @@
 </div>
 <div class="grid side">
   <div>
+    <div class="chart-tools">{{ unit_picker(trends, '/sites/' ~ loc.id, fq) }}</div>
     <div class="card"><h3>Average rating by {{ trends.granularity }}</h3><div class="chart-wrap"><canvas id="cRating"></canvas></div></div>
-    <div class="card"><h3>Reviews per {{ trends.granularity }}</h3><div class="chart-wrap" style="height:180px"><canvas id="cVolume"></canvas></div></div>
+    <div class="card"><h3>Reviews per {{ trends.granularity }}</h3><div class="chart-wrap"><canvas id="cVolume"></canvas></div></div>
     <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Negative reviews in this window</h3>
     <table><tbody>{% for r in w.negative_reviews[:25] %}<tr class="clickable" onclick="location.href='/reviews/{{ r.id }}'"><td style="white-space:nowrap">{{ stars(r) }}</td><td><div class="snippet">{{ r.text or '(no text)' }}</div><span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|local('%b %-d') }}{% if r.category %} · {{ r.category }}{% endif %}</span></td><td>{% if r.has_owner_reply %}<span class="pill good">Replied</span>{% else %}<span class="pill warn">Open</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
   </div>

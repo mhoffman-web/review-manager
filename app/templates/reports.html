@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
+{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Reports</h1><span class="muted small">{{ range_label(dr) }}</span>
@@ -16,7 +16,8 @@
 </div>
 {% if disputed %}<p class="muted small" style="margin:-8px 0 14px">{{ disputed }} review{{ '' if disputed==1 else 's' }} reported to Google and awaiting a decision {{ 'is' if disputed==1 else 'are' }} left out of these figures.</p>{% endif %}
 
-<div class="grid two">
+<div class="chart-tools">{{ unit_picker(trends, '/reports', fq) }}</div>
+<div class="grid two charts">
   <div class="card"><h3>Average rating by {{ trends.granularity }}</h3><div class="chart-wrap"><canvas id="cRating"></canvas></div>
     <details class="data"><summary>Data table</summary><table style="font-size:12px;margin-top:6px"><thead><tr><th>Brand</th>{% for l in trends.labels %}<th class="num">{{ l }}</th>{% endfor %}</tr></thead><tbody>{% for b in trends.brands %}<tr><td>{{ b }}</td>{% for v in trends.avg_rating[b] %}<td class="num">{{ v if v is not none else '–' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></details></div>
   <div class="card"><h3>Reviews per {{ trends.granularity }}</h3><div class="chart-wrap"><canvas id="cVolume"></canvas></div>
@@ -69,7 +70,7 @@
     <td class="num muted" data-sort="{{ s.listing_avg or '' }}">{{ s.listing_avg or '–' }}{% if s.listing_total %} <span class="small">({{ s.listing_total }})</span>{% endif %}</td>
   </tr>{% endfor %}</tbody></table></div>
   <div>
-    <div class="card"><h3>Rating mix</h3><div class="chart-wrap" style="height:170px"><canvas id="cDist"></canvas></div></div>
+    <div class="card"><h3>Rating mix</h3><div class="chart-wrap short"><canvas id="cDist"></canvas></div></div>
     <div class="card"><h3>Reasons</h3>
       {% if w.themes %}<div class="bars">{% set mx = (w.themes|map(attribute=1)|max) %}{% for cat, n in w.themes %}<span>{{ cat }}</span><span class="bar"><i style="width:{{ (100*n/mx)|int }}%"></i></span><span class="num">{{ n }}</span>{% endfor %}</div>
       {% else %}<p class="muted small">No negative reviews in this window.</p>{% endif %}</div>

@@ -17,7 +17,7 @@ window.RM = (function(){
   function base(opts){
     return Object.assign({ responsive:true, maintainAspectRatio:false, interaction:{ mode:'index', intersect:false },
       plugins:{ legend:{ display: !!opts.legend, position:'top', align:'start' }, tooltip:{ enabled:true } },
-      scales:{ x:{ grid:{ display:false }, border:{ color: gridLine } }, y:Object.assign({ grid:{ color: gridLine }, border:{ display:false }, ticks:{ precision:0 } }, opts.y || {}) } }, opts.extra || {});
+      scales:{ x:{ grid:{ display:false }, border:{ color: gridLine }, ticks:{ maxTicksLimit: 12, maxRotation: 0, autoSkipPadding: 12 } }, y:Object.assign({ grid:{ color: gridLine }, border:{ display:false }, ticks:{ precision:0 } }, opts.y || {}) } }, opts.extra || {});
   }
   function line(ctx, labels, series, opts){
     opts = opts || {};
@@ -26,8 +26,10 @@ window.RM = (function(){
   }
   function bars(ctx, labels, series, opts){
     opts = opts || {};
-    return new Chart(ctx, { type:'bar', data:{ labels:labels, datasets: series.map(function(s){ return { label:s.label, data:s.data, backgroundColor:s.color, borderColor:surface, borderWidth: series.length > 1 ? { top:2 } : 0, borderSkipped:false, borderRadius: 3, maxBarThickness: 28 }; }) },
-      options: base({ legend: series.length > 1, y: Object.assign({ stacked:true }, opts.y || {}), extra: Object.assign({ scales:{ x:{ stacked:true, grid:{ display:false }, border:{ color: gridLine } }, y: Object.assign({ stacked:true, grid:{ color: gridLine }, border:{ display:false }, ticks:{ precision:0 } }, opts.y || {}) } }, opts.extra || {}) }) });
+    // Bars stay inside the box whatever the point count: Chart.js divides the width by the number of
+    // categories; categoryPercentage leaves a gap and maxBarThickness stops a 7-point window looking chunky.
+    return new Chart(ctx, { type:'bar', data:{ labels:labels, datasets: series.map(function(s){ return { label:s.label, data:s.data, backgroundColor:s.color, borderColor:surface, borderWidth: series.length > 1 ? { top:2 } : 0, borderSkipped:false, borderRadius: 2, maxBarThickness: 18, categoryPercentage: 0.7, barPercentage: 1 }; }) },
+      options: base({ legend: series.length > 1, y: Object.assign({ stacked:true }, opts.y || {}), extra: Object.assign({ scales:{ x:{ stacked:true, grid:{ display:false }, border:{ color: gridLine }, ticks:{ maxTicksLimit: 12, maxRotation: 0, autoSkipPadding: 12 } }, y: Object.assign({ stacked:true, grid:{ color: gridLine }, border:{ display:false }, ticks:{ precision:0 } }, opts.y || {}) } }, opts.extra || {}) }) });
   }
   function hbars(ctx, labels, data, color){
     return new Chart(ctx, { type:'bar', data:{ labels:labels, datasets:[{ data:data, backgroundColor:color, borderRadius:3, maxBarThickness:18 }] },
@@ -42,4 +44,12 @@ window.RM = (function(){
 <details class="data"><summary>Data table</summary>
 <table style="font-size:12px;margin-top:6px"><thead><tr><th></th>{% for l in labels %}<th class="num">{{ l }}</th>{% endfor %}</tr></thead><tbody>
 {% for name, vals in rows %}<tr><td>{{ name }}</td>{% for v in vals %}<td class="num">{{ v if v is not none else '–' }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></details>
+{% endmacro %}
+{% macro unit_picker(trends, base_url, fq) %}
+<span class="seg" role="group" aria-label="Chart unit">
+  <span class="seg-label">Unit</span>
+  <a class="{% if trends.unit == 'auto' %}on{% endif %}" href="{{ base_url }}?{{ fq }}" title="Chosen from the window length">Auto</a>
+  {% for u in ['day', 'week', 'month'] %}<a class="{% if trends.unit == u %}on{% endif %}{% if u not in trends.units %} off{% endif %}" href="{{ base_url }}?{{ fq }}&unit={{ u }}" {% if u not in trends.units %}title="Too many points for this window"{% endif %}>{{ u|capitalize }}</a>{% endfor %}
+  <span class="muted small">· showing by {{ trends.granularity }}</span>
+</span>
 {% endmacro %}

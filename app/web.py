@@ -766,13 +766,14 @@ def draft(review_id: int, user: User = Depends(auth.current_user), db: Session =
 # ----------------------------------------------------------------- reports
 @app.get("/reports", response_class=HTMLResponse)
 def reports(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: List[str] = Query([]),
-            group_id: List[str] = Query([]), location_id: List[str] = Query([]), range: str = "last30", start: str = "", end: str = ""):
+            group_id: List[str] = Query([]), location_id: List[str] = Query([]), range: str = "last30", start: str = "", end: str = "",
+            unit: str = ""):
     dr = _dr(range, start, end)
     brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
     ids = _scope(db, grp_f, loc_f)
     bl = brands_f or None
     wr = window_report(db, dr, brands=bl, location_ids=ids)
-    trends = build_trends(db, dr, brands=bl, location_ids=ids)
+    trends = build_trends(db, dr, brands=bl, location_ids=ids, unit=unit or None)
     fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
     rec = recovery_stats(db, dr, brands=bl, location_ids=ids)
     responders = responder_stats(db, dr)
@@ -783,7 +784,7 @@ def reports(request: Request, user: User = Depends(auth.current_user), db: Sessi
     for row in rank:
         ls = listing.get(row["location_id"]) if row["location_id"] else None
         row["listing_avg"], row["listing_total"] = (ls["avg"], ls["total"]) if ls else (None, None)
-    return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends),
+    return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), unit=trends["unit"],
                    brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, recovery=rec, disputed=disputed_count(db, dr, bl, ids),
                    monthly=monthly_summary(db, bl, months=12, location_ids=ids), responders=responders,
                    rank=rank, ai_enabled=settings.ai_enabled, **_filter_ctx(db))
@@ -960,15 +961,16 @@ def employees_report(request: Request, user: User = Depends(auth.current_user), 
 
 @app.get("/sites/{location_id}", response_class=HTMLResponse)
 def site_page(location_id: int, request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
-              range: str = "last30", start: str = "", end: str = ""):
+              range: str = "last30", start: str = "", end: str = "", unit: str = ""):
     loc = db.execute(select(Location).where(Location.id == location_id).options(selectinload(Location.sources))).scalar_one_or_none()
     if not loc:
         raise HTTPException(404, "Site not found")
     dr = _dr(range, start, end)
     wr = window_report(db, dr, location_ids=[loc.id])
-    trends = build_trends(db, dr, location_ids=[loc.id])
+    trends = build_trends(db, dr, location_ids=[loc.id], unit=unit or None)
     emp = employee_report(db, dr, location_ids=[loc.id])
-    return _render(request, "site.html", user, db, loc=loc, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), emp=emp)
+    return _render(request, "site.html", user, db, loc=loc, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), emp=emp,
+                   unit=trends["unit"], fq=dr.query())
 
 
 # ----------------------------------------------------------------- locations / sync admin
