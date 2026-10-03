@@ -207,3 +207,11 @@ details.ms .ms-tools { display:flex; gap:6px; padding:0 6px 6px; border-bottom:1
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) details.ms summary { background:var(--icon-white); } }
 .dist-legend { display:flex; gap:14px; font-size:12px; color:var(--ink-2); margin:0 0 8px; } .dist-legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 .star-cell { font-variant-numeric:tabular-nums; }
+
+/* Report recipients: one column per edition */
+.recip-head { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px; } .recip-head h3 { display:flex; align-items:center; gap:8px; margin-bottom:4px; } .recip-head p { margin:0; }
+.recip-list { list-style:none; margin:8px 0 12px; padding:0; border-top:1px solid var(--line); }
+.recip-list li { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+.recip-list .who { display:flex; flex-direction:column; min-width:0; } .recip-list .who span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recip-list li.empty { justify-content:center; padding:14px 0; }
+.recip-add textarea { min-height:68px; font-size:13px; margin-bottom:8px; }

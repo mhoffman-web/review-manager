@@ -9,7 +9,7 @@
   python cli.py link-location --source-id 3 --location-id 7
   python cli.py backfill
   python cli.py sync
-  python cli.py add-recipient --email gm@... --name "..." [--brands "WashU"]
+  python cli.py add-recipient --email gm@... --name "..." [--edition il] [--edition tn] [--remove]
   python cli.py send-report [--dry-run] [--out report.html] [--to a@x,b@y]
   python cli.py worker
   python cli.py web [--port 8000]
@@ -143,15 +143,24 @@ def cmd_sync(a, full=False):
 
 
 def cmd_add_recipient(a):
+    eds = a.edition or ["all"]
     with session_scope() as s:
         r = s.execute(select(ReportRecipient).where(ReportRecipient.email == a.email.lower())).scalar_one_or_none()
         if r is None:
-            r = ReportRecipient(email=a.email.lower())
+            if a.remove:
+                print(f"{a.email} is not a recipient"); return
+            r = ReportRecipient(email=a.email.lower(), edition="")
             s.add(r)
-        r.name, r.active = a.name, not a.remove
-        r.edition = a.edition if a.edition in ("il", "tn", "all") else "all"
-        r.brands = {"il": "WashU", "tn": "ICON;WA", "all": None}[r.edition]
-    print(f"recipient {a.email} {'removed' if a.remove else 'active'} (edition: {a.edition})")
+        have = r.editions
+        have = [e for e in have if e not in eds] if a.remove else have + [e for e in eds if e not in have]
+        if not have:
+            s.delete(r); print(f"recipient {a.email} removed"); return
+        r.set_editions(have)
+        r.name = a.name or r.name
+        r.active = True
+        r.brands = None if "all" in have else ";".join(sorted({b for e in have for b in {"il": ["WashU"], "tn": ["ICON", "WA"]}[e]}))
+        final = r.editions
+    print(f"recipient {a.email} gets: {', '.join(final)}")
 
 
 def cmd_send_report(a):
@@ -213,7 +222,7 @@ def main():
     sp = sub.add_parser("link-location"); sp.add_argument("--source-id", type=int, required=True); sp.add_argument("--location-id", type=int, required=True); sp.set_defaults(fn=cmd_link_location)
     sp = sub.add_parser("backfill", help="full pull of all history"); sp.add_argument("--source"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=True))
     sp = sub.add_parser("sync", help="incremental pull"); sp.add_argument("--source"); sp.add_argument("--full", action="store_true"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=a.full))
-    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--edition", default="all", choices=["il", "tn", "all"], help="il = Illinois, tn = Tennessee, all = Corporate"); sp.add_argument("--remove", action="store_true"); sp.set_defaults(fn=cmd_add_recipient)
+    sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--edition", action="append", choices=["il", "tn", "all"], help="il = Illinois, tn = Tennessee, all = Corporate; repeat for several (default all)"); sp.add_argument("--remove", action="store_true", help="drop from the given editions (or from everything)"); sp.set_defaults(fn=cmd_add_recipient)
     sp = sub.add_parser("send-report"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--out", help="also write the HTML here"); sp.add_argument("--to", help="comma list, overrides stored recipients"); sp.add_argument("--edition", default="all", choices=["il", "tn", "all"], help="with --to: which edition to send"); sp.set_defaults(fn=cmd_send_report)
     sp = sub.add_parser("classify-negatives", help="AI-group negative reviews into workbook categories"); sp.add_argument("--range", default="last30"); sp.add_argument("--start"); sp.add_argument("--end"); sp.add_argument("--force", action="store_true", help="re-classify reviews that already have a category"); sp.set_defaults(fn=cmd_classify)
     sub.add_parser("worker").set_defaults(fn=cmd_worker)

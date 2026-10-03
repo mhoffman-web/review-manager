@@ -117,6 +117,24 @@ def test_report_counts(db):
     assert digest_subject(il).startswith("Reviews ") and "IL: 1 received" in digest_subject(il)
     # Brand filter that matches nothing yields an empty report, not an error.
     assert build_report(s, brands=["ICON"]).new_24h == 0
+    # Week-to-date (Mon–Sun) block: counts by site only, no review text; absent on a Monday, "Full week" on a Sunday.
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+    tz = ZoneInfo(settings.timezone)
+    for ext, day, rating, text in [("mon", 1, 5, "Monday sparkle"), ("wed", 3, 1, "Wednesday scratch")]:
+        t = datetime(2026, 6, day, 12, 0, tzinfo=tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        s.add(Review(source_link_id=link.id, source="google", external_id=ext, author_name="Al", rating=rating, text=text,
+                     created_at_source=t, updated_at_source=t, has_owner_reply=False, raw_json="{}"))
+    s.commit()
+    wed = build_digest(s, "il", resolve_range("custom", "2026-06-03", "2026-06-03"))
+    assert wed.total == 1 and wed.wtd is not None and wed.wtd.total == 2 and wed.wtd.counts == [1, 0, 0, 0, 1]
+    assert wed.wtd_title == "Week to date · Mon Jun 1 – Wed Jun 3" and wed.wtd.sites[0].reviews == [] and wed.wtd.wtd is None
+    html = render_digest_html(wed)
+    assert "Week to date" in html and "Wednesday scratch" in html and "Monday sparkle" not in html
+    assert "Week to date" in render_digest_text(wed) and "Monday sparkle" not in render_digest_text(wed)
+    assert build_digest(s, "il", resolve_range("custom", "2026-06-01", "2026-06-01")).wtd is None
+    assert build_digest(s, "il", resolve_range("custom", "2026-06-07", "2026-06-07")).wtd_title == "Full week · Mon Jun 1 – Sun Jun 7"
+    assert build_digest(s, "il", resolve_range("last7")).wtd is None
 
 
 def test_google_normalize_and_timestamps():

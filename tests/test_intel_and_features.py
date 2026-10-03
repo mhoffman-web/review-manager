@@ -179,6 +179,24 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     s.expire_all()
     from app.models import ReportRecipient
     assert s.execute(select(ReportRecipient).where(ReportRecipient.email == "tn@x.com")).scalar_one().edition == "tn"
+    # per-edition paste box: several addresses at once, "Name <email>" keeps the name, one person on two editions
+    r4 = c.post("/admin/recipients", data={"emails": "Lily <lily@x.com>, sarah@x.com\nnot-an-email", "edition": "il"}, follow_redirects=False)
+    assert r4.status_code == 303 and "added=2" in r4.headers["location"] and "skipped=not-an-email" in r4.headers["location"]
+    c.post("/admin/recipients", data={"emails": "LILY@x.com", "edition": "tn"}, follow_redirects=False)
+    s.expire_all()
+    lily = s.execute(select(ReportRecipient).where(ReportRecipient.email == "lily@x.com")).scalar_one()
+    assert lily.name == "Lily" and lily.editions == ["il", "tn"]
+    from app.reports import recipient_groups
+    groups = recipient_groups(s)
+    assert groups["il"] == ["lily@x.com", "sarah@x.com"] and set(groups["tn"]) == {"lily@x.com", "tn@x.com"}
+    page = c.get("/admin/recipients").text
+    assert page.count("lily@x.com") == 2 and "Add to IL" in page and "Add to Corporate" in page
+    assert c.post(f"/admin/recipients/{lily.id}/delete", data={"edition": "il"}, follow_redirects=False).status_code == 303
+    s.expire_all()
+    assert lily.editions == ["tn"]
+    c.post(f"/admin/recipients/{lily.id}/delete", follow_redirects=False)
+    s.expire_all()
+    assert s.execute(select(ReportRecipient).where(ReportRecipient.email == "lily@x.com")).scalar_one_or_none() is None
     mk(s, link, "w3", 4, "Nice wash, quick line", author="Kim Z", days_ago=0.2); s.commit()
     page = c.get("/?view=all").text
     assert "Reviewer" in page and "Reply to review" in page and "Claim" not in page and "New site group" in page

@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections import Counter
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -727,33 +730,87 @@ def toggle_user(uid: int, user: User = Depends(auth.admin_user), db: Session = D
     return RedirectResponse(url="/admin/users", status_code=303)
 
 
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def _parse_recipients(raw: str):
+    """'Jane <jane@x.com>, sam@y.com' (commas, semicolons or newlines) -> [(email, name)], [tokens with no address]."""
+    found, bad = [], []
+    for chunk in re.split(r"[,;\n]+", raw or ""):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        hits = list(EMAIL_RE.finditer(chunk))
+        if not hits:
+            bad.append(chunk[:40])
+        elif len(hits) == 1:
+            found.append((hits[0].group(0).lower(), chunk[:hits[0].start()].strip(" <>\"'")))
+        else:
+            found.extend((m.group(0).lower(), "") for m in hits)
+    return found, bad
+
+
+def _legacy_brands(eds: List[str]) -> Optional[str]:
+    """Keep the old `brands` column coherent with the editions (nothing reads it any more)."""
+    if any(EDITIONS[e]["brands"] is None for e in eds if e in EDITIONS):
+        return None
+    return ";".join(sorted({b for e in eds if e in EDITIONS for b in EDITIONS[e]["brands"]})) or None
+
+
 @app.get("/admin/recipients", response_class=HTMLResponse)
-def admin_recipients(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+def admin_recipients(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db),
+                     added: int = 0, existing: int = 0, skipped: str = "", ed: str = ""):
     rows = db.execute(select(ReportRecipient).order_by(ReportRecipient.email)).scalars().all()
-    return _render(request, "admin_recipients.html", user, db, rows=rows, brands=_brands(db))
+    by_edition = {key: [r for r in rows if key in r.editions and r.active] for key in EDITIONS}
+    site_counts = Counter(l.brand for l in db.execute(select(Location)).scalars().all())
+    desc = {key: (", ".join(f"{b} · {site_counts.get(b, 0)} sites" for b in e["brands"]) if e["brands"]
+                  else f"All {sum(site_counts.values())} sites, grouped by brand") for key, e in EDITIONS.items()}
+    notice = {"added": added, "existing": existing, "skipped": [t for t in skipped.split("|") if t],
+              "ed": ed if ed in EDITIONS else "all"} if (added or existing or skipped) else None
+    return _render(request, "admin_recipients.html", user, db, by_edition=by_edition, desc=desc, notice=notice,
+                   tz_short=settings.timezone.split("/")[-1].replace("_", " "))
 
 
 @app.post("/admin/recipients")
-def save_recipient(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
-                   name: str = Form(""), edition: str = Form("all")):
-    email = email.strip().lower()
-    r = db.execute(select(ReportRecipient).where(ReportRecipient.email == email)).scalar_one_or_none()
-    if r is None:
-        r = ReportRecipient(email=email)
-        db.add(r)
-    r.name = name.strip() or None
-    r.edition = edition if edition in EDITIONS else "all"
-    r.brands = ";".join(EDITIONS[r.edition]["brands"] or []) or None
-    r.active = True
+def save_recipients(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), emails: str = Form(""),
+                    email: str = Form(""), name: str = Form(""), edition: str = Form("all")):
+    """Add one or many addresses to an edition. One address may sit on several editions."""
+    ed = edition if edition in EDITIONS else "all"
+    found, bad = _parse_recipients("\n".join(x for x in (emails, email) if x))
+    if name.strip() and len(found) == 1:
+        found = [(found[0][0], name.strip())]
+    added = existing = 0
+    for addr, nm in found:
+        r = db.execute(select(ReportRecipient).where(ReportRecipient.email == addr)).scalar_one_or_none()
+        if r is None:
+            r = ReportRecipient(email=addr, edition="")
+            db.add(r)
+        eds = r.editions
+        if ed in eds and r.active:
+            existing += 1
+        else:
+            added += 1
+            eds.append(ed)
+        r.set_editions(eds)
+        r.brands = _legacy_brands(r.editions)
+        r.name = nm or r.name
+        r.active = True
     db.commit()
-    return RedirectResponse(url="/admin/recipients", status_code=303)
+    q = urlencode({"added": added, "existing": existing, "skipped": "|".join(bad), "ed": ed})
+    return RedirectResponse(url=f"/admin/recipients?{q}", status_code=303)
 
 
 @app.post("/admin/recipients/{rid}/delete")
-def delete_recipient(rid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+def delete_recipient(rid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), edition: str = Form("")):
+    """Drop someone from one edition, or from the list entirely when no edition is given."""
     r = db.get(ReportRecipient, rid)
     if r:
-        db.delete(r)
+        eds = [e for e in r.editions if e != edition] if edition else []
+        if eds:
+            r.set_editions(eds)
+            r.brands = _legacy_brands(eds)
+        else:
+            db.delete(r)
         db.commit()
     return RedirectResponse(url="/admin/recipients", status_code=303)
 

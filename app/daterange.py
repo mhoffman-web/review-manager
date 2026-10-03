@@ -12,7 +12,7 @@ from .config import settings
 
 PRESETS: List[Tuple[str, str]] = [
     ("today", "Today"), ("yesterday", "Yesterday"), ("last7", "Last 7 days"), ("last30", "Last 30 days"),
-    ("this_week", "This week"), ("last_week", "Last week"), ("this_month", "This month"), ("last_month", "Last month"),
+    ("this_week", "This week (Mon–Sun)"), ("last_week", "Last week (Mon–Sun)"), ("this_month", "This month"), ("last_month", "Last month"),
     ("this_quarter", "This quarter"), ("last_quarter", "Last quarter"), ("ytd", "Year to date"), ("last12m", "Last 12 months"),
     ("all", "All time"), ("custom", "Custom range"),
 ]

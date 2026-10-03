@@ -1,3 +1,9 @@
+{% macro site_table(x) %}<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px">
+      <tr style="color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.04em"><td style="padding:6px 4px">Site</td>{% for i in [1,2,3,4,5] %}<td align="right" style="padding:6px 4px">{{ i }}★</td>{% endfor %}<td align="right" style="padding:6px 4px">Total</td><td align="right" style="padding:6px 4px">Avg</td></tr>
+      {% set groups = x.by_brand() %}{% for brand, sites in groups %}{% if groups|length > 1 %}<tr><td colspan="8" style="padding:8px 4px 2px;font-weight:700;color:#374151;border-top:1px solid #e5e7eb">{{ brand }}</td></tr>{% endif %}
+      {% for s in sites %}<tr style="border-top:1px solid #f3f4f6"><td style="padding:5px 4px">{{ s.name }}</td>{% for c in s.counts %}<td align="right" style="padding:5px 4px;{% if loop.index <= 3 and c %}color:#b91c1c;font-weight:700{% endif %}">{{ c or '' }}</td>{% endfor %}<td align="right" style="padding:5px 4px;font-weight:700">{{ s.total }}</td><td align="right" style="padding:5px 4px">{{ s.avg or '–' }}</td></tr>{% endfor %}{% endfor %}
+      <tr style="border-top:2px solid #e5e7eb;font-weight:700"><td style="padding:6px 4px">Total</td>{% for c in x.counts %}<td align="right" style="padding:6px 4px">{{ c }}</td>{% endfor %}<td align="right" style="padding:6px 4px">{{ x.total }}</td><td align="right" style="padding:6px 4px">{{ x.avg or '–' }}</td></tr>
+    </table>{% endmacro %}
 <!doctype html><html><head><meta charset="utf-8"><title>Reviews received</title></head>
 <body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2328;font-size:15px;line-height:1.45">
 <div style="max-width:720px;margin:0 auto;padding:20px">
@@ -11,13 +17,16 @@
 
   <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:16px">
     <h3 style="margin:0 0 8px">By site</h3>
-    {% if d.sites %}<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-size:13px">
-      <tr style="color:#6b7280;text-transform:uppercase;font-size:11px;letter-spacing:.04em"><td style="padding:6px 4px">Site</td>{% for i in [1,2,3,4,5] %}<td align="right" style="padding:6px 4px">{{ i }}★</td>{% endfor %}<td align="right" style="padding:6px 4px">Total</td><td align="right" style="padding:6px 4px">Avg</td></tr>
-      {% for brand, sites in d.by_brand() %}{% if d.by_brand()|length > 1 %}<tr><td colspan="8" style="padding:8px 4px 2px;font-weight:700;color:#374151;border-top:1px solid #e5e7eb">{{ brand }}</td></tr>{% endif %}
-      {% for s in sites %}<tr style="border-top:1px solid #f3f4f6"><td style="padding:5px 4px">{{ s.name }}</td>{% for c in s.counts %}<td align="right" style="padding:5px 4px;{% if loop.index <= 3 and c %}color:#b91c1c;font-weight:700{% endif %}">{{ c or '' }}</td>{% endfor %}<td align="right" style="padding:5px 4px;font-weight:700">{{ s.total }}</td><td align="right" style="padding:5px 4px">{{ s.avg or '–' }}</td></tr>{% endfor %}{% endfor %}
-      <tr style="border-top:2px solid #e5e7eb;font-weight:700"><td style="padding:6px 4px">Total</td>{% for c in d.counts %}<td align="right" style="padding:6px 4px">{{ c }}</td>{% endfor %}<td align="right" style="padding:6px 4px">{{ d.total }}</td><td align="right" style="padding:6px 4px">{{ d.avg or '–' }}</td></tr>
-    </table>{% else %}<p style="color:#6b7280;margin:0">No reviews were received.</p>{% endif %}
+    {% if d.sites %}{{ site_table(d) }}{% else %}<p style="color:#6b7280;margin:0">No reviews were received.</p>{% endif %}
   </div>
+
+  {% if d.wtd %}
+  <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:16px">
+    <h3 style="margin:0 0 2px">{{ d.wtd_title }}</h3>
+    <p style="margin:0 0 8px;color:#6b7280;font-size:13px">{{ d.wtd.total }} review{{ '' if d.wtd.total==1 else 's' }}{% if d.wtd.avg %} · average {{ d.wtd.avg }}{% endif %}{% if d.wtd.negatives %} · <span style="color:#b91c1c">{{ d.wtd.negatives }} negative</span>{% endif %} · <a href="{{ settings.app_base_url }}/reports/distribution?{{ d.wtd.dr.query() }}" style="color:#1d4ed8">see the reviews</a></p>
+    {% if d.wtd.sites %}{{ site_table(d.wtd) }}{% else %}<p style="color:#6b7280;margin:0">No reviews so far this week.</p>{% endif %}
+  </div>
+  {% endif %}
 
   {% for s in d.sites %}
   <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:12px">

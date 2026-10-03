@@ -213,11 +213,22 @@ class ReportRecipient(Base):
     email: Mapped[str] = mapped_column(String(200), unique=True)
     name: Mapped[Optional[str]] = mapped_column(String(120))
     brands: Mapped[Optional[str]] = mapped_column(String(120))      # legacy; edition is what the digest uses now
-    edition: Mapped[str] = mapped_column(String(10), default="all")  # il / tn / all
+    edition: Mapped[str] = mapped_column(String(10), default="all")  # "il", "tn", "all" or a ";" list of them
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     def brand_list(self) -> List[str]:
         return [b.strip() for b in (self.brands or "").split(";") if b.strip()]
+
+    @property
+    def editions(self) -> List[str]:
+        """Digest editions this person gets (il / tn / all). Stored as a ';' list so one
+        address can be on more than one edition; a legacy NULL means Corporate."""
+        raw = "all" if self.edition is None else self.edition
+        return [e.strip() for e in raw.split(";") if e.strip()]
+
+    def set_editions(self, eds) -> None:
+        wanted = set(eds)
+        self.edition = ";".join(e for e in ("il", "tn", "all") if e in wanted)
 
 
 class ReportSend(Base):

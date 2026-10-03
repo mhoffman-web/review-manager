@@ -1,17 +1,25 @@
 {% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('recipients') }}
-<div class="grid side">
-<div class="card" style="padding:0"><table><thead><tr><th>Email</th><th>Name</th><th>Edition</th><th></th></tr></thead><tbody>
-{% for r in rows %}<tr><td>{{ r.email }}</td><td>{{ r.name or '' }}</td><td><span class="pill">{{ EDITIONS[r.edition].short if r.edition in EDITIONS else 'Corporate' }}</span> <span class="muted small">{{ EDITIONS[r.edition].label if r.edition in EDITIONS else '' }}</span></td>
-<td><form method="post" action="/admin/recipients/{{ r.id }}/delete" onsubmit="return confirm('Remove this recipient?')"><button class="ghost small">Remove</button></form></td></tr>
-{% else %}<tr><td colspan="4" class="muted" style="padding:24px;text-align:center">No recipients. The morning email goes nowhere until someone is added.</td></tr>{% endfor %}</tbody></table></div>
-<div class="card"><h3>Add recipient</h3>
-<form method="post" action="/admin/recipients">
-<p><input type="email" name="email" placeholder="Email" required style="width:100%"></p>
-<p><input type="text" name="name" placeholder="Name (optional)" style="width:100%"></p>
-<p class="small muted">Which edition do they get?</p>
-<p>{% for key, ed in EDITIONS.items() %}<label class="inline" style="margin-right:14px"><input type="radio" name="edition" value="{{ key }}" {% if key=='all' %}checked{% endif %}> {{ ed.short }} <span class="muted small">({{ ed.label }})</span></label>{% endfor %}</p>
-<p><button class="primary">Add</button></p></form>
-<p class="muted small">Sent daily at {{ settings.report_hour_local }}:00 {{ settings.timezone.split('/')[-1].replace('_',' ') }}: yesterday's reviews by site and star rating, plus every review received. Preview: <a href="/reports/morning?edition=il" target="_blank">IL</a> · <a href="/reports/morning?edition=tn" target="_blank">TN</a> · <a href="/reports/morning?edition=all" target="_blank">Corporate</a>.</p></div>
+{% if notice %}<div class="msg {{ 'ok' if (notice.added or notice.existing) else 'err' }}">
+  {% if notice.added %}Added {{ notice.added }} to the {{ EDITIONS[notice.ed].short }} edition.{% endif %}
+  {% if notice.existing %} {{ notice.existing }} already on it.{% endif %}
+  {% if notice.skipped %} <span class="muted">Skipped, no email address found: {{ notice.skipped|join(', ') }}</span>{% endif %}
+</div>{% endif %}
+<p class="muted small" style="margin:0 0 14px">Sent daily at {{ settings.report_hour_local }}:00 {{ tz_short }}: yesterday's reviews by site and star rating, every review received, and a week-to-date (Mon–Sun) table. Add addresses to each edition below; one person can be on more than one. Paste one per line or comma-separated. <code>Name &lt;email&gt;</code> keeps the name.</p>
+<div class="grid three">
+{% for key, ed in EDITIONS.items() %}
+<div class="card recip-card">
+  <div class="recip-head"><div><h3>{{ ed.label }} <span class="pill small">{{ ed.short }}</span></h3><p class="muted small">{{ desc[key] }}</p></div>
+    <a class="chip" href="/reports/morning?edition={{ key }}" target="_blank">Preview</a></div>
+  <ul class="recip-list">
+  {% for r in by_edition[key] %}<li><div class="who"><span>{{ r.email }}</span>{% if r.name %}<span class="muted small">{{ r.name }}</span>{% endif %}</div>
+    <form method="post" action="/admin/recipients/{{ r.id }}/delete"><input type="hidden" name="edition" value="{{ key }}"><button class="ghost small" title="Remove from the {{ ed.short }} edition">Remove</button></form></li>
+  {% else %}<li class="muted small empty">Nobody gets the {{ ed.short }} edition yet.</li>{% endfor %}
+  </ul>
+  <form method="post" action="/admin/recipients" class="recip-add"><input type="hidden" name="edition" value="{{ key }}">
+    <textarea name="emails" rows="3" placeholder="jane@washucarwash.com&#10;Sam Lee <sam@iconcarwash.com>" required></textarea>
+    <button class="primary small">Add to {{ ed.short }}</button></form>
+</div>
+{% endfor %}
 </div>
 {% endblock %}

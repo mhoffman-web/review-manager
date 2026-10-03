@@ -37,11 +37,13 @@ review_manager/
 * **Listings** – source listings, mapping to sites, sync status, manual sync.
 * **Templates / Admin** – manage templates, users, and morning-report recipients
   in the browser (no CLI needed day to day).
-* **Morning email** – yesterday's reviews only: a by-site table of 1★–5★ counts
-  with totals and averages, then every review received, grouped by site. Three
-  editions: Illinois (WashU), Tennessee (ICON + Wash Associates) and Corporate
-  (everything, grouped by brand). Each recipient picks an edition on Admin →
-  Report recipients. Preview at `/reports/morning?edition=il|tn|all`.
+* **Morning email** – yesterday's reviews: a by-site table of 1★–5★ counts with
+  totals and averages, a week-to-date (Mon–Sun) table of the same shape with no
+  review text (on Mondays it covers the full week just ended), then every review
+  received yesterday, grouped by site. Three editions: Illinois (WashU),
+  Tennessee (ICON + Wash Associates) and Corporate (everything, grouped by
+  brand). Admin → Report recipients has a paste box per edition; one address can
+  be on several editions. Preview at `/reports/morning?edition=il|tn|all`.
 * **Rating distribution report** (`/reports/distribution`) – reviews by star
   rating per site for any window, stacked bars plus a table, filtered by brand,
   group and site.
@@ -148,12 +150,17 @@ Original checklist for reference:
 
 ## 3. Morning report
 
-Recipients live in the `report_recipients` table. Each can be limited to brands.
+Recipients live in the `report_recipients` table, one row per address with the
+editions it gets (`il`, `tn`, `all`, or a `;` list). The easiest way to manage
+them is Admin → Report recipients, which has a paste box under each edition
+(one address per line or comma-separated; `Name <email>` keeps the name). The
+CLI does the same thing:
 
 ```bash
 python cli.py add-recipient --email owner@washucarwash.com --name "Owner" --edition all
 python cli.py add-recipient --email il-ops@washucarwash.com --name "IL Ops" --edition il
-python cli.py add-recipient --email tn-ops@washucarwash.com --name "TN Ops" --edition tn
+python cli.py add-recipient --email rm@iconcarwash.com --edition il --edition tn   # both regional editions
+python cli.py add-recipient --email rm@iconcarwash.com --edition il --remove       # drop from one edition only
 python cli.py send-report --dry-run --out /tmp/report.html         # writes report.il/.tn/.all.html
 python cli.py send-report --to you@washucarwash.com --edition tn   # real send of one edition
 ```

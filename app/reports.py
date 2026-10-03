@@ -539,6 +539,8 @@ class Digest:
     counts: List[int] = field(default_factory=lambda: [0, 0, 0, 0, 0])
     unrated: int = 0
     reviews: List[Review] = field(default_factory=list)        # all reviews in the window, brand/site/time order
+    wtd: Optional["Digest"] = None                             # Mon–Sun week-to-date summary (counts only, no review text)
+    wtd_title: str = ""
 
     @property
     def total(self) -> int:
@@ -560,7 +562,9 @@ class Digest:
         return [(b, out[b]) for b in sorted(out, key=lambda b: BRAND_ORDER.index(b) if b in BRAND_ORDER else 9)]
 
 
-def build_digest(session: Session, edition: str = "all", dr: Optional[DateRange] = None) -> Digest:
+def build_digest(session: Session, edition: str = "all", dr: Optional[DateRange] = None, with_wtd: bool = True) -> Digest:
+    """One edition's digest for a window (default yesterday). A single-day window also gets a
+    week-to-date block: Monday of that week through the day, counts by site only."""
     ed = EDITIONS.get(edition, EDITIONS["all"])
     dr = dr or resolve_range("yesterday")
     brands = ed["brands"]
@@ -582,6 +586,17 @@ def build_digest(session: Session, edition: str = "all", dr: Optional[DateRange]
             d.counts[i] += site.counts[i]
         d.unrated += site.unrated
         d.reviews.extend(site.reviews)
+    if with_wtd and dr.days == 1:
+        day = dr.end_date
+        monday = day - timedelta(days=day.weekday())
+        if monday != day:  # on a Monday the week-to-date is just the day itself
+            w = resolve_range("custom", monday.isoformat(), day.isoformat())
+            d.wtd = build_digest(session, edition, w, with_wtd=False)
+            d.wtd.reviews = []
+            for site in d.wtd.sites:
+                site.reviews = []
+            kind = "Full week" if day.weekday() == 6 else "Week to date"
+            d.wtd_title = f"{kind} · {monday:%a %b %-d} – {day:%a %b %-d}"
     return d
 
 
@@ -597,6 +612,12 @@ def render_digest_text(d: Digest) -> str:
     for s in d.sites:
         lines.append(f"{s.name:<28} " + "".join(f"{c:>4}" for c in s.counts) + f" {s.total:>6} {s.avg or '-':>5}")
     lines.append("")
+    if d.wtd:
+        lines += [f"{d.wtd_title}: {d.wtd.total} reviews · avg {d.wtd.avg or '-'} · {d.wtd.negatives} negative",
+                  f"{'Site':<28} {'1★':>4}{'2★':>4}{'3★':>4}{'4★':>4}{'5★':>4} {'Total':>6} {'Avg':>5}"]
+        for s in d.wtd.sites:
+            lines.append(f"{s.name:<28} " + "".join(f"{c:>4}" for c in s.counts) + f" {s.total:>6} {s.avg or '-':>5}")
+        lines.append("")
     for s in d.sites:
         lines.append(f"-- {s.name}")
         for r in s.reviews:
@@ -669,8 +690,9 @@ def recipient_groups(session: Session) -> Dict[str, List[str]]:
     rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True))).scalars().all()
     groups: Dict[str, List[str]] = {}
     for r in rows:
-        ed = r.edition if r.edition in EDITIONS else "all"
-        groups.setdefault(ed, []).append(r.email)
+        eds = [e for e in r.editions if e in EDITIONS] or ["all"]
+        for ed in eds:
+            groups.setdefault(ed, []).append(r.email)
     if not groups and settings.report_recipients_fallback:
         groups["all"] = list(settings.report_recipients_fallback)
     return groups
