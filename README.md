@@ -61,7 +61,25 @@ review_manager/
 * **More reporting** – review NPS (5★ minus ≤3★ share), rating-only share,
   monthly summary table, location rank, replies by team member with median
   and p90 time and template / AI share.
-* Light and dark mode follow the OS; layout works on a phone.
+* **Date ranges everywhere** – inbox, reports, site and team pages share one
+  control with the SYNC-style presets (Today, Yesterday, Last 7/30 days, This/Last
+  week, This/Last month, This/Last quarter, Year to date, Last 12 months, All time)
+  plus a custom from/to picker. Charts bucket by day, week or month depending on
+  the window. Saved views remember the range.
+* **Negative review reasons** – every negative review is grouped into the 13
+  categories from the weekly reviews workbook (Long Line, Wash Quality, Dryer,
+  Vacuum, Damage, Billing/Cancellation, Pricing, POS, LPR/Access Issues, Customer
+  Service, Closure, No Content, Unknown). Keyword rules group them on sync; with
+  `ANTHROPIC_API_KEY` set, Claude does the grouping (`AI_CLASSIFY=true`, the
+  default) and admins can re-group a window from the reports page or with
+  `python cli.py classify-negatives --range last_month`. Reports show a site ×
+  reason matrix for the selected window.
+* **Inbox** shows our posted reply inline (who, when, how long after the review)
+  or a "Reply to review" call to action; the Reviewer column is the customer's
+  name. Site groups can be created inline from the inbox filters.
+* Brand look follows the Icon Car Wash design system (tokens, Open Sans, cyan
+  accent) with a text wordmark rather than the logo artwork.
+* Light and dark mode follow the OS, with a toggle in the header; layout works on a phone.
 
 ## 1. Local setup (one time)
 
