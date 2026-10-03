@@ -349,3 +349,62 @@ def test_sync_all_survives_a_poisoned_session(db, monkeypatch):
     totals = sync_all(s, full=True)
     s.expire_all()
     assert totals["error"] == 0 and s.get(ReviewSourceLink, link.id).fail_count == 0
+
+
+def test_database_url_normalised_for_psycopg3():
+    from app.config import normalize_database_url as n
+    assert n("postgres://u:p@h:5432/db") == "postgresql+psycopg://u:p@h:5432/db"
+    assert n("postgresql://u:p@h/db?sslmode=require") == "postgresql+psycopg://u:p@h/db?sslmode=require"
+    assert n("postgresql+psycopg2://u@h/db") == "postgresql+psycopg://u@h/db"
+    assert n("postgresql+psycopg://u@h/db") == "postgresql+psycopg://u@h/db"
+    assert n("sqlite:///./review_manager.db") == "sqlite:///./review_manager.db"
+
+
+def test_facebook_paging_keeps_cursor_and_stops_on_repeat():
+    from app.sources.facebook import FacebookPageAdapter
+    pages = {
+        "first": {"data": [{"created_time": "2026-09-30T14:05:42+0000", "recommendation_type": "positive", "review_text": "one",
+                            "reviewer": {"name": "A", "id": "1"}, "open_graph_story": {"id": "s1"}}],
+                  "paging": {"next": "https://graph.facebook.com/v21.0/123/ratings?access_token=SECRET&fields=a%2Cb&limit=100&after=CUR2"}},
+        "CUR2": {"data": [{"created_time": "2026-09-29T14:05:42+0000", "recommendation_type": "negative", "review_text": "two",
+                           "reviewer": {"name": "B", "id": "2"}, "open_graph_story": {"id": "s2"}}],
+                 # a buggy cursor that points back at itself must not loop forever
+                 "paging": {"next": "https://graph.facebook.com/v21.0/123/ratings?fields=a%2Cb&limit=100&after=CUR2&access_token=SECRET"}},
+    }
+    calls = []
+
+    class FB(FacebookPageAdapter):
+        def _page_token(self, page_id):
+            return "PAGE"
+
+        def _request(self, method, url, *, params=None, data=None, token=None, retries=3):
+            calls.append((url, params))
+            if url.endswith("/123"):
+                return {"overall_star_rating": 4.5, "rating_count": 2}
+            assert "access_token" not in url
+            if "after=CUR2" in url:
+                assert "fields=a%2Cb" in url and "limit=100" in url
+                return pages["CUR2"]
+            return pages["first"]
+
+    link = ReviewSourceLink(source="facebook", external_location_id="123")
+    got = [nr.external_id for nr, _ in FB(token="x").fetch_reviews(link)]
+    assert got == ["s1", "s2"] and len(calls) == 3
+
+
+def test_empty_site_scope_matches_nothing(db):
+    """A group with no sites (or no overlap with the chosen site) must not fall back to every site."""
+    from app.daterange import resolve_range
+    from app.reports import rating_distribution, window_report
+    from app.web import _scope
+    from app.models import SiteGroup
+    s, link = db
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("a", 5, "great", 1), nr("b", 1, "bad", 2)])); s.commit()
+    empty = SiteGroup(name="Nobody yet"); s.add(empty); s.commit()
+    dr = resolve_range("last30")
+    ids = _scope(s, [empty.id], [])
+    assert ids == []
+    assert window_report(s, dr, location_ids=ids).count == 0
+    assert window_report(s, dr, location_ids=None).count == 2
+    assert rating_distribution(s, dr, location_ids=[])["rows"] == []
+    assert _scope(s, [empty.id], [link.location_id]) == []

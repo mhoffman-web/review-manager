@@ -29,7 +29,7 @@
 </div>
 {% endblock %}
 {% block scripts %}{{ chart_script() }}
-<script>(function(){ var T = {{ trends_json|safe }}; var b = T.brands[0]; if(!b) return; var c = RM.color(T.colors[b]);
+<script>(function(){ var T = {{ trends|tojson }}; var b = T.brands[0]; if(!b) return; var c = RM.color(T.colors[b]);
 RM.line(document.getElementById('cRating'), T.labels, [{label:b, data:T.avg_rating[b], color:c}], { y:{ min:1, max:5, ticks:{ stepSize:1 } } });
 RM.bars(document.getElementById('cVolume'), T.labels, [{label:b, data:T.counts[b], color:c}]); })();</script>
 {% endblock %}

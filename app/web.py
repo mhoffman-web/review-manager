@@ -44,6 +44,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     from .db import init_db
+    settings.check_or_exit("the web app")
     init_db()          # create tables / add new columns before serving
     if settings.sso_config_problem:
         log.warning("microsoft sign-in disabled: %s", settings.sso_config_problem)
@@ -225,8 +226,32 @@ def login_form(request: Request, next: str = "/", error: str = ""):
                    password_enabled=settings.password_login_enabled, domains=settings.sso_allowed_domains)
 
 
+def _safe_path(value: Optional[str], default: str = "/") -> str:
+    """A same-site path to redirect to, or `default`.
+
+    Only a single leading slash is accepted: `//host` and `/\\host` are
+    protocol-relative to browsers, and a scheme or control characters are refused."""
+    v = (value or "").strip()
+    if (not v.startswith("/") or v.startswith("//") or v.startswith("/\\") or "\\" in v[:3]
+            or any(ord(ch) < 32 for ch in v)):
+        return default
+    return v
+
+
+def _filter_qs(brands, group_ids, location_ids, dr=None, extra=()) -> str:
+    """Report filter query string with every value percent-encoded."""
+    parts = [("brand", b) for b in brands] + [("group_id", i) for i in group_ids] + [("location_id", i) for i in location_ids] + list(extra)
+    rest = urlencode(parts)
+    head = dr.query() if dr is not None else ""
+    return "&".join(p for p in (head, rest) if p)
+
+
+def _with_query(path: str, query: str) -> str:
+    return f"{path}{'&' if '?' in path else '?'}{query}"
+
+
 def _session_redirect(user: User, next_url: str) -> RedirectResponse:
-    resp = RedirectResponse(url=next_url or "/", status_code=303)
+    resp = RedirectResponse(url=_safe_path(next_url), status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session_cookie(user), httponly=True, samesite="lax",
                     max_age=auth.SESSION_MAX_AGE, secure=settings.app_base_url.startswith("https"))
     return resp
@@ -240,7 +265,7 @@ def microsoft_login(next: str = "/"):
     resp = RedirectResponse(url=auth_url, status_code=303)
     resp.set_cookie(auth.FLOW_COOKIE, flow_cookie, httponly=True, samesite="lax", max_age=auth.FLOW_MAX_AGE,
                     secure=settings.app_base_url.startswith("https"))
-    resp.set_cookie("rm_next", next if next.startswith("/") else "/", httponly=True, samesite="lax", max_age=auth.FLOW_MAX_AGE)
+    resp.set_cookie("rm_next", _safe_path(next), httponly=True, samesite="lax", max_age=auth.FLOW_MAX_AGE)
     return resp
 
 
@@ -257,7 +282,7 @@ def microsoft_callback(request: Request, db: Session = Depends(get_db)):
         resp.delete_cookie(auth.FLOW_COOKIE)
         return resp
     next_url = request.cookies.get("rm_next") or "/"
-    resp = _session_redirect(user, next_url if next_url.startswith("/") else "/")
+    resp = _session_redirect(user, next_url)
     resp.delete_cookie(auth.FLOW_COOKIE)
     resp.delete_cookie("rm_next")
     return resp
@@ -277,7 +302,7 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), n
         return _render(request, "login.html", None, next=next, error="Wrong email or password.", sso_enabled=settings.sso_enabled,
                        password_enabled=settings.password_login_enabled, domains=settings.sso_allowed_domains)
     auth.clear_login_failures(*keys)
-    return _session_redirect(user, next if next.startswith("/") else "/")
+    return _session_redirect(user, next)
 
 
 @app.post("/logout")
@@ -464,12 +489,14 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     current_params = {"view": view, "brands": brands_f, "location_ids": loc_f, "group_ids": grp_f, "ratings": rat_f, "q": q,
                       "range": dr.preset if dr else "", "start": dr.start_date.isoformat() if (dr and dr.is_custom) else "",
                       "end": dr.end_date.isoformat() if (dr and dr.is_custom) else ""}
-    qs_parts = [f"view={view}", f"q={q}", f"range={current_params['range']}", f"start={current_params['start']}", f"end={current_params['end']}"]
-    qs_parts += [f"brand={b}" for b in brands_f] + [f"location_id={i}" for i in loc_f] + [f"group_id={i}" for i in grp_f] + [f"rating={i}" for i in rat_f]
-    qs = "&".join(qs_parts)
+    # Every value is percent-encoded: a search for "A&W" or "50% off" must survive sorting,
+    # paging, export and the review page's prev/next queue.
+    qs_parts = [("view", view), ("q", q), ("range", current_params["range"]), ("start", current_params["start"]), ("end", current_params["end"])]
+    qs_parts += [("brand", b) for b in brands_f] + [("location_id", i) for i in loc_f] + [("group_id", i) for i in grp_f] + [("rating", i) for i in rat_f]
+    qs = urlencode(qs_parts)
     filtered = bool(q or brands_f or loc_f or grp_f or rat_f or dr)
     # Queue context: the review page uses it for prev/next within exactly this list.
-    ctx = f"{qs}&sort={sort}&dir={dir}&sv={active_view.id if active_view else 0}"
+    ctx = qs + "&" + urlencode({"sort": sort, "dir": dir, "sv": active_view.id if active_view else 0})
     # Inline composer: top template suggestions per open review on this page.
     tpl_rows = db.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True)).order_by(ReplyTemplate.sort_order, ReplyTemplate.name)).scalars().all()
     first = user.name.split()[0] if user.name else ""
@@ -492,13 +519,12 @@ def create_group(request: Request, user: User = Depends(auth.current_user), db: 
                  location_ids: List[int] = Form([]), back: str = Form("/")):
     name = name.strip()[:80]
     if not name or not location_ids:
-        return RedirectResponse(url=back or "/", status_code=303)
+        return RedirectResponse(url=_safe_path(back), status_code=303)
     g = db.execute(select(SiteGroup).where(SiteGroup.name == name)).scalar_one_or_none() or SiteGroup(name=name)
     db.add(g)
     g.locations = db.execute(select(Location).where(Location.id.in_(location_ids))).scalars().all()
     db.commit()
-    sep = "&" if "?" in back else "?"
-    return RedirectResponse(url=f"{back}{sep}group_id={g.id}" if back.startswith("/") else f"/?group_id={g.id}", status_code=303)
+    return RedirectResponse(url=_with_query(_safe_path(back), f"group_id={g.id}"), status_code=303)
 
 
 @app.post("/views")
@@ -625,7 +651,7 @@ def _review_page(request: Request, user: User, db: Session, r: Review, ctx: str 
     others = db.execute(select(Review).join(ReviewSourceLink).where(
         Review.source_link_id == r.source_link_id, Review.id != r.id, Review.is_deleted.is_(False),
         Review.author_name == r.author_name, Review.author_name.isnot(None)).order_by(Review.created_at_source.desc()).limit(5)).scalars().all() if r.author_name else []
-    resp = _render(request, "review.html", user, db, r=r, msg=msg, templates_json=json.dumps(tpls), tpls=tpls, ctx=ctx,
+    resp = _render(request, "review.html", user, db, r=r, msg=msg, tpls=tpls, ctx=ctx,
                    nav_links=_neighbors(db, r, user, ctx), same_author=others, ai_enabled=settings.ai_enabled,
                    warnings=warnings or [], draft=draft, timeline=_timeline(r), listing=listing_summaries(db).get(r.location.id) if r.location else None)
     resp.status_code = status_code
@@ -668,7 +694,7 @@ def post_reply(review_id: int, request: Request, text: str = Form(...), go_next:
         return JSONResponse({"ok": False, "error": msg}, status_code=409) if wants_json else _review_page(request, user, db, r, ctx, msg=msg)
     if not text:
         return JSONResponse({"ok": False, "error": "Reply was empty"}, status_code=400) if wants_json else \
-            RedirectResponse(url=f"/reviews/{review_id}?msg=Reply+was+empty&ctx={ctx}", status_code=303)
+            RedirectResponse(url=f"/reviews/{review_id}?" + urlencode({"msg": "Reply was empty", "ctx": ctx}), status_code=303)
     warnings = _reply_warnings(db, r, text) if not force else []
     if warnings:
         if wants_json:
@@ -706,8 +732,8 @@ def post_reply(review_id: int, request: Request, text: str = Form(...), go_next:
         return JSONResponse({"ok": ok, "msg": msg, "reply": _reply_cell(r, user.name.split()[0]) if ok else None,
                              "next": nxt if ok else None, "error": row.error if not ok else None}, status_code=200 if ok else 502)
     if ok and nxt:
-        return RedirectResponse(url=f"/reviews/{nxt}?msg={msg.replace(' ', '+')}+Here+is+the+next+one.&ctx={ctx}", status_code=303)
-    return RedirectResponse(url=f"/reviews/{review_id}?msg={msg.replace(' ', '+')}&ctx={ctx}", status_code=303)
+        return RedirectResponse(url=f"/reviews/{nxt}?" + urlencode({"msg": f"{msg} Here is the next one.", "ctx": ctx}), status_code=303)
+    return RedirectResponse(url=f"/reviews/{review_id}?" + urlencode({"msg": msg, "ctx": ctx}), status_code=303)
 
 
 @app.post("/reviews/{review_id}/reply/delete")
@@ -727,7 +753,7 @@ def delete_reply(review_id: int, user: User = Depends(auth.current_user), db: Se
         record(db, r, "reply_failed", actor_id=user.id, error=str(exc)[:300], action="delete")
         msg = "Delete failed."
     db.commit()
-    return RedirectResponse(url=f"/reviews/{review_id}?msg={msg.replace(' ', '+')}", status_code=303)
+    return RedirectResponse(url=f"/reviews/{review_id}?" + urlencode({"msg": msg}), status_code=303)
 
 
 @app.post("/reviews/{review_id}/note")
@@ -752,7 +778,7 @@ def claim(review_id: int, user: User = Depends(auth.current_user), db: Session =
     else:
         r.assigned_to_id, r.assigned_at = user.id, datetime.utcnow()
     db.commit()
-    return RedirectResponse(url=back or f"/reviews/{review_id}", status_code=303)
+    return RedirectResponse(url=_safe_path(back, f"/reviews/{review_id}"), status_code=303)
 
 
 @app.post("/reviews/{review_id}/archive")
@@ -766,11 +792,11 @@ def archive(review_id: int, request: Request, user: User = Depends(auth.current_
     db.commit()
     msg = "Archived. It no longer counts as unanswered." if r.is_archived else "Restored to the inbox."
     if _wants_json(request):
-        return JSONResponse({"ok": True, "archived": r.is_archived, "msg": msg, "undo": f"/reviews/{r.id}/archive"})
-    q = urlencode({"msg": msg, "undo": f"/reviews/{r.id}/archive"})
-    if back and back.startswith("/"):
-        return RedirectResponse(url=f"{back}{'&' if '?' in back else '?'}{q}", status_code=303)
-    return RedirectResponse(url=f"/reviews/{review_id}?{q}", status_code=303)
+        return JSONResponse({"ok": True, "archived": r.is_archived, "msg": msg, "undo_archive": r.id})
+    # The toast rebuilds the undo request from this id alone, so a crafted link cannot aim
+    # its Undo button at another endpoint.
+    q = urlencode({"msg": msg, "undo_archive": r.id})
+    return RedirectResponse(url=_with_query(_safe_path(back, f"/reviews/{review_id}"), q), status_code=303)
 
 
 @app.post("/reviews/{review_id}/report")
@@ -845,7 +871,7 @@ def reports(request: Request, user: User = Depends(auth.current_user), db: Sessi
     bl = brands_f or None
     wr = window_report(db, dr, brands=bl, location_ids=ids)
     trends = build_trends(db, dr, brands=bl, location_ids=ids, unit=unit or None)
-    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
+    fq = _filter_qs(brands_f, grp_f, loc_f, dr)
     rec = recovery_stats(db, dr, brands=bl, location_ids=ids)
     responders = responder_stats(db, dr)
     for p_ in responders:
@@ -855,7 +881,7 @@ def reports(request: Request, user: User = Depends(auth.current_user), db: Sessi
     for row in rank:
         ls = listing.get(row["location_id"]) if row["location_id"] else None
         row["listing_avg"], row["listing_total"] = (ls["avg"], ls["total"]) if ls else (None, None)
-    return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), unit=trends["unit"],
+    return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, unit=trends["unit"],
                    brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, recovery=rec, disputed=disputed_count(db, dr, bl, ids),
                    monthly=monthly_summary(db, bl, months=12, location_ids=ids), responders=responders,
                    rank=rank, ai_enabled=settings.ai_enabled, **_filter_ctx(db))
@@ -868,8 +894,8 @@ def distribution_report(request: Request, user: User = Depends(auth.current_user
     brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
     ids = _scope(db, grp_f, loc_f)
     dist = rating_distribution(db, dr, brands=brands_f or None, location_ids=ids)
-    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
-    return _render(request, "reports_distribution.html", user, db, dist=dist, dist_json=json.dumps(dist["chart"]), dr=dr,
+    fq = _filter_qs(brands_f, grp_f, loc_f, dr)
+    return _render(request, "reports_distribution.html", user, db, dist=dist, dr=dr,
                    brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, disputed=disputed_count(db, dr, brands_f or None, ids), **_filter_ctx(db))
 
 
@@ -894,7 +920,7 @@ def weekly_report(request: Request, user: User = Depends(auth.current_user), db:
     brand_of = {r["name"]: r["brand"] for r in dist_lw["rows"] + dist_q["rows"]}
     sites = sorted(names, key=lambda n: (["WashU", "ICON", "WA"].index(brand_of.get(n, "?")) if brand_of.get(n) in ["WashU", "ICON", "WA"] else 9, n))
     themes_used = [c for c in THEMES if any(w.theme_matrix.get(sname, {}).get(c) for w in (w_lw, w_q) for sname in sites)]
-    fq = "&".join([f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f] + ([f"as_of={as_of}"] if as_of else []))
+    fq = _filter_qs(brands_f, grp_f, loc_f, None, [("as_of", as_of)] if as_of else [])
     return _render(request, "reports_weekly.html", user, db, lw=lw, qtd=qtd, dist_lw=dist_lw, dist_q=dist_q, by_lw=by_lw, by_q=by_q, sites=sites,
                    brand_of=brand_of, w_lw=w_lw, w_q=w_q, themes_used=themes_used, as_of=as_of or lw.end_date.isoformat(),
                    brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, **_filter_ctx(db))
@@ -1026,7 +1052,7 @@ def employees_report(request: Request, user: User = Depends(auth.current_user), 
     brands_f, grp_f, loc_f = _strs(brand), _ints(group_id), _ints(location_id)
     ids = _scope(db, grp_f, loc_f)
     rep = employee_report(db, dr, brands=brands_f or None, location_ids=ids)
-    fq = "&".join([dr.query()] + [f"brand={b}" for b in brands_f] + [f"group_id={i}" for i in grp_f] + [f"location_id={i}" for i in loc_f])
+    fq = _filter_qs(brands_f, grp_f, loc_f, dr)
     return _render(request, "reports_employees.html", user, db, rep=rep, dr=dr, brands_f=brands_f, grp_f=grp_f, loc_f=loc_f, fq=fq, **_filter_ctx(db))
 
 
@@ -1040,7 +1066,7 @@ def site_page(location_id: int, request: Request, user: User = Depends(auth.curr
     wr = window_report(db, dr, location_ids=[loc.id])
     trends = build_trends(db, dr, location_ids=[loc.id], unit=unit or None)
     emp = employee_report(db, dr, location_ids=[loc.id])
-    return _render(request, "site.html", user, db, loc=loc, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), emp=emp,
+    return _render(request, "site.html", user, db, loc=loc, w=wr, dr=dr, trends=trends, emp=emp,
                    unit=trends["unit"], fq=dr.query())
 
 
@@ -1394,7 +1420,7 @@ def ai_classify_window(background: BackgroundTasks, user: User = Depends(auth.ad
                 except AiUnavailable:
                     break
     background.add_task(_run)
-    return RedirectResponse(url=back, status_code=303)
+    return RedirectResponse(url=_safe_path(back, "/reports"), status_code=303)
 
 
 @app.post("/admin/ai")
@@ -1490,9 +1516,16 @@ def add_listing(user: User = Depends(auth.admin_user), db: Session = Depends(get
 
 # ----------------------------------------------------------------- admin: API keys
 @app.get("/admin/api", response_class=HTMLResponse)
-def admin_api(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), new: str = ""):
+def admin_api(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+    return _admin_api_page(request, user, db)
+
+
+def _admin_api_page(request: Request, user: User, db: Session, new_key: str = "") -> HTMLResponse:
     keys = db.execute(select(ApiKey).options(selectinload(ApiKey.created_by)).order_by(ApiKey.active.desc(), ApiKey.created_at.desc())).scalars().all()
-    return _render(request, "admin_api.html", user, db, keys=keys, new_key=new, base=settings.app_base_url, cors=settings.api_cors_origins)
+    resp = _render(request, "admin_api.html", user, db, keys=keys, new_key=new_key, base=settings.app_base_url, cors=settings.api_cors_origins)
+    if new_key:
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/admin/api")
@@ -1500,8 +1533,8 @@ def create_api_key(request: Request, user: User = Depends(auth.admin_user), db: 
     raw = _new_api_key()
     db.add(ApiKey(name=name.strip()[:120] or "Unnamed", prefix=raw[:11], key_hash=_hash_api_key(raw), created_by_id=user.id))
     db.commit()
-    request.session_new_key = raw  # type: ignore[attr-defined]
-    return RedirectResponse(url=f"/admin/api?{urlencode({'new': raw})}", status_code=303)
+    # Shown once, in this response body only: never in a URL, a redirect or a log line.
+    return _admin_api_page(request, user, db, new_key=raw)
 
 
 @app.post("/admin/api/{kid}/revoke")

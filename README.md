@@ -240,11 +240,19 @@ python cli.py worker                             # sync + daily report
 ```
 
 Recommended hosting: a small Postgres (Supabase, Neon, Render) and the two
-processes on Render or Fly.io. Set `DATABASE_URL`, `SECRET_KEY`,
+processes on Render or Fly.io. Paste `DATABASE_URL` exactly as the provider gives
+it: `postgres://` and `postgresql://` URLs are rewritten to the installed
+psycopg 3 driver (`postgresql+psycopg://`) automatically. Set `DATABASE_URL`, `SECRET_KEY`,
 `APP_BASE_URL` (used for links in the email), the `SMTP_*` vars, and
 `GOOGLE_TOKEN_JSON` (paste the contents of `google_token.json`). The web
 process should sit behind HTTPS; the session cookie is marked `secure` when
 `APP_BASE_URL` starts with https.
+
+The web app, the worker and `init-db` refuse to start on an unsafe
+configuration: a missing or default `SECRET_KEY` on any host other than
+localhost, or `DEMO_MODE` together with real Google/Facebook credentials, a
+Postgres database, or (on a public host) no `DEMO_PASSWORD`. The error names
+the setting to fix.
 
 Quota note: the v4 reviews endpoint allows hundreds of requests per minute
 once access is approved. 23 listings polled every 20 minutes is about 1% of

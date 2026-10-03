@@ -44,13 +44,14 @@ document.addEventListener('click',function(e){document.querySelectorAll('details
 function label(){b.textContent=cur()==='dark'?'Light mode':'Dark mode';}
 b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('rm-theme',n);}catch(e){}label();window.dispatchEvent(new Event('rm-theme-change'));});label();})();</script>
 <script>
-// Toast notices: ?msg=...&undo=/path from a redirect, or RM.toast(msg, {undo:url}) from scripts. Undo posts to the url, then reloads.
+// Toast notices: ?msg=...&undo_archive=<review id> from a redirect, or RMtoast.show(msg, {undoArchive:id}) from scripts.
+// Undo only ever re-posts the archive toggle for that review id; no URL is taken from the query string.
 window.RMtoast=(function(){var el=document.getElementById('toast'),msgEl=el.querySelector('.toast-msg'),undoBtn=el.querySelector('.toast-undo'),timer=null,undoUrl=null;
 function hide(){el.hidden=true;clearTimeout(timer);}
-function show(msg,opts){opts=opts||{};msgEl.textContent=msg;undoUrl=opts.undo||null;undoBtn.hidden=!undoUrl;el.classList.toggle('err',!!opts.error);el.hidden=false;clearTimeout(timer);timer=setTimeout(hide,undoUrl?9000:5000);}
+function show(msg,opts){opts=opts||{};var uid=String(opts.undoArchive==null?'':opts.undoArchive);msgEl.textContent=msg;undoUrl=/^\d{1,12}$/.test(uid)?'/reviews/'+uid+'/archive':null;undoBtn.hidden=!undoUrl;el.classList.toggle('err',!!opts.error);el.hidden=false;clearTimeout(timer);timer=setTimeout(hide,undoUrl?9000:5000);}
 undoBtn.addEventListener('click',function(){if(!undoUrl)return;undoBtn.disabled=true;fetch(undoUrl,{method:'POST',headers:{'Accept':'application/json'}}).then(function(){location.reload();}).catch(function(){location.reload();});});
 el.querySelector('.toast-x').addEventListener('click',hide);
-try{var p=new URLSearchParams(location.search);var m=p.get('msg');if(m){show(m,{undo:p.get('undo'),error:/fail|error|could not/i.test(m)});p.delete('msg');p.delete('undo');var qs=p.toString();history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash);}}catch(e){}
+try{var p=new URLSearchParams(location.search);var m=p.get('msg');if(m){show(m,{undoArchive:p.get('undo_archive'),error:/fail|error|could not/i.test(m)});p.delete('msg');p.delete('undo_archive');p.delete('undo');var qs=p.toString();history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash);}}catch(e){}
 return {show:show,hide:hide};})();
 </script>
 <script src="/static/keys.js"></script>

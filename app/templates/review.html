@@ -90,7 +90,7 @@
 {% block scripts %}
 <script>
 (function(){
-  var tpls = {{ templates_json|safe }};
+  var tpls = {{ tpls|tojson }};
   var ta = document.getElementById('replyText'), cc = document.getElementById('charCount');
   if (ta) {
     var tplId = document.getElementById('templateId'), aiFlag = document.getElementById('aiFlag'), force = document.getElementById('forceFlag');

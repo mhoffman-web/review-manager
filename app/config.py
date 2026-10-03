@@ -24,10 +24,25 @@ def _csv(value: Optional[str]) -> List[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def normalize_database_url(url: str) -> str:
+    """Point any Postgres URL at the psycopg 3 driver this app installs.
+
+    Render, Heroku and Supabase hand out postgres:// (a name SQLAlchemy 2 refuses) or
+    postgresql:// (which SQLAlchemy maps to psycopg2, not installed here)."""
+    url = (url or "").strip()
+    for prefix in ("postgres://", "postgresql://", "postgresql+psycopg2://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+DEFAULT_SECRET_KEY = "dev-only-insecure-key"
+
+
 @dataclass
 class Settings:
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./review_manager.db")
-    secret_key: str = os.getenv("SECRET_KEY", "dev-only-insecure-key")
+    database_url: str = normalize_database_url(os.getenv("DATABASE_URL") or "sqlite:///./review_manager.db")
+    secret_key: str = os.getenv("SECRET_KEY") or DEFAULT_SECRET_KEY
     # Render sets RENDER_EXTERNAL_URL automatically; APP_BASE_URL overrides it.
     app_base_url: str = (os.getenv("APP_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000").rstrip("/")
     # DEMO_MODE=true seeds placeholder data on startup when the database is empty (hosted demo only).
@@ -109,6 +124,37 @@ class Settings:
     sso_auto_provision: bool = _bool(os.getenv("SSO_AUTO_PROVISION"), True)
     # Keep the email + password form available (break-glass). Set false once SSO is proven.
     password_login_enabled: bool = _bool(os.getenv("PASSWORD_LOGIN_ENABLED"), True)
+
+    @property
+    def is_local(self) -> bool:
+        """Running on this machine only (APP_BASE_URL points at localhost)."""
+        host = self.app_base_url.split("://", 1)[-1].split("/", 1)[0].rsplit(":", 1)[0].strip("[]").lower()
+        return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".localhost")
+
+    def fatal_config_problems(self) -> List[str]:
+        """Settings that make a deployment unsafe. Web, worker and init-db refuse to start on any."""
+        problems: List[str] = []
+        if not self.is_local and (self.secret_key == DEFAULT_SECRET_KEY or len(self.secret_key) < 24):
+            problems.append("SECRET_KEY is missing, the built-in default, or shorter than 24 characters. Anyone could "
+                            "sign their own admin session. Set a long random value, e.g. "
+                            "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"`.")
+        if self.demo_mode:
+            real_source = bool(self.google_token_json or Path(self.google_token_file).exists() or self.facebook_access_token)
+            if real_source:
+                problems.append("DEMO_MODE is on while Google or Facebook credentials are configured. In demo mode replies are "
+                                "recorded as posted but never reach the platform. Turn DEMO_MODE off for a real deployment.")
+            if not self.database_url.startswith("sqlite"):
+                problems.append("DEMO_MODE is on against a non-SQLite database. Demo mode seeds fake reviews and users into "
+                                "an empty database; it is only for the throwaway demo.")
+            if not self.is_local and not os.getenv("DEMO_PASSWORD"):
+                problems.append("DEMO_MODE on a public host requires DEMO_PASSWORD, otherwise the seeded accounts use "
+                                "the passwords printed in dev_seed.py.")
+        return problems
+
+    def check_or_exit(self, what: str) -> None:
+        problems = self.fatal_config_problems()
+        if problems:
+            raise SystemExit(f"Refusing to start {what}:\n  - " + "\n  - ".join(problems))
 
     @property
     def sso_accepted_tenants(self) -> List[str]:

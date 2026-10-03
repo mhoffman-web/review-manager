@@ -97,3 +97,36 @@ def test_forgot_and_change_password(db, monkeypatch):
     assert anon.post("/login", data={"email": "admin@x.com", "password": "another-long-password"}, follow_redirects=False).status_code == 303
     # a forged token is refused
     assert "not valid any more" in anon.get("/password/reset?token=abc.def.ghi").text
+
+
+def test_unsafe_deployments_refuse_to_start(monkeypatch, tmp_path):
+    import pytest
+    from app.config import DEFAULT_SECRET_KEY, settings as st
+    monkeypatch.setattr(st, "app_base_url", "https://reviews.example.com")
+    monkeypatch.setattr(st, "secret_key", DEFAULT_SECRET_KEY)
+    monkeypatch.setattr(st, "demo_mode", False)
+    assert any("SECRET_KEY" in p for p in st.fatal_config_problems())
+    with pytest.raises(SystemExit):
+        st.check_or_exit("the web app")
+    monkeypatch.setattr(st, "secret_key", "x" * 48)
+    assert st.fatal_config_problems() == []
+    # the default key is tolerated only on localhost
+    monkeypatch.setattr(st, "app_base_url", "http://localhost:8000")
+    monkeypatch.setattr(st, "secret_key", DEFAULT_SECRET_KEY)
+    assert st.fatal_config_problems() == []
+    # demo mode: never with real credentials, never on Postgres, needs DEMO_PASSWORD in public
+    monkeypatch.setattr(st, "app_base_url", "https://demo.example.com")
+    monkeypatch.setattr(st, "secret_key", "x" * 48)
+    monkeypatch.setattr(st, "demo_mode", True)
+    monkeypatch.setattr(st, "google_token_file", str(tmp_path / "none.json"))
+    monkeypatch.setattr(st, "google_token_json", None)
+    monkeypatch.setattr(st, "facebook_access_token", None)
+    monkeypatch.delenv("DEMO_PASSWORD", raising=False)
+    assert [p for p in st.fatal_config_problems() if "DEMO_PASSWORD" in p]
+    monkeypatch.setenv("DEMO_PASSWORD", "long-random")
+    assert st.fatal_config_problems() == []
+    monkeypatch.setattr(st, "facebook_access_token", "EAAB...")
+    assert any("credentials" in p for p in st.fatal_config_problems())
+    monkeypatch.setattr(st, "facebook_access_token", None)
+    monkeypatch.setattr(st, "database_url", "postgresql+psycopg://u@h/db")
+    assert any("non-SQLite" in p for p in st.fatal_config_problems())

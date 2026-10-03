@@ -37,6 +37,8 @@ log = logging.getLogger("cli")
 
 
 def cmd_init_db(_a):
+    from app.config import settings
+    settings.check_or_exit("init-db")
     init_db()
     print(f"tables ready in {settings.database_url}")
 
@@ -198,6 +200,8 @@ def cmd_classify(a):
 
 
 def cmd_worker(_a):
+    from app.config import settings
+    settings.check_or_exit("the worker")
     from app.worker import run_forever
     run_forever()
 

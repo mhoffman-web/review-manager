@@ -82,7 +82,7 @@
 {% block scripts %}{{ chart_script() }}
 <script>
 (function(){
-  var T = {{ trends_json|safe }};
+  var T = {{ trends|tojson }};
   var series = T.brands.map(function(b){ return { label:b, data:T.avg_rating[b], color: RM.color(T.colors[b]) }; });
   RM.line(document.getElementById('cRating'), T.labels, series, { y:{ min:1, max:5, ticks:{ stepSize:1 } } });
   RM.bars(document.getElementById('cVolume'), T.labels, T.brands.map(function(b){ return { label:b, data:T.counts[b], color: RM.color(T.colors[b]) }; }));

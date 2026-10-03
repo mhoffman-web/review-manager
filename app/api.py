@@ -1,5 +1,6 @@
 """Read-only JSON API for other systems (the Teams Portal screens). Auth: an API key from
-Admin -> API keys, sent as `X-API-Key: <key>` (or `Authorization: Bearer <key>`, or `?key=`).
+Admin -> API keys, sent as `X-API-Key: <key>` or `Authorization: Bearer <key>`. Keys are never
+accepted in the query string, where they would land in access logs and browser history.
 
 GET /api/v1/sites                       every active site with the platform's own rating
 GET /api/v1/summary?range=last30        KPIs for the window, in total and per site
@@ -38,11 +39,14 @@ def hash_key(key: str) -> str:
 
 
 def api_key(request: Request, db: Session = Depends(get_db)) -> ApiKey:
-    raw = request.headers.get("x-api-key") or request.query_params.get("key") or ""
+    raw = (request.headers.get("x-api-key") or "").strip()
     auth = request.headers.get("authorization") or ""
     if not raw and auth.lower().startswith("bearer "):
         raw = auth[7:].strip()
     if not raw:
+        if "key" in request.query_params:
+            raise HTTPException(400, "API keys are not accepted in the URL. Send the header X-API-Key: <key> instead, "
+                                     "and revoke this key in Admin -> API keys because it has been logged.")
         raise HTTPException(401, "Missing API key. Send X-API-Key: <key>.")
     k = db.execute(select(ApiKey).where(ApiKey.key_hash == hash_key(raw), ApiKey.active.is_(True))).scalar_one_or_none()
     if not k:

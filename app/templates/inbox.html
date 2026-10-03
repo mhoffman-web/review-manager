@@ -89,7 +89,7 @@ window.RMinbox = (function () {
   function archive(id) {
     fetch('/reviews/' + id + '/archive', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
       if (!j.ok) return; var r = row(id); if (r) { var c = cmp(id); if (c) c.remove(); r.remove(); }
-      RMtoast.show(j.msg, { undo: j.undo });
+      RMtoast.show(j.msg, { undoArchive: j.undo_archive });
     }).catch(function () { RMtoast.show('Could not archive', { error: true }); });
   }
   function post(id, goNext, force) {

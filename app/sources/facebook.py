@@ -17,6 +17,8 @@ import time
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 import requests
 
 from ..config import settings
@@ -28,6 +30,30 @@ log = logging.getLogger(__name__)
 
 class FacebookAPIError(RuntimeError):
     pass
+
+
+def _without_token(url: str) -> str:
+    """Drop only the access_token query parameter from a Graph `paging.next` URL.
+
+    The URL carries fields, limit and the `after` cursor; _request re-adds the token
+    as a parameter so it never appears in a logged URL."""
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _next_page(data: Dict[str, Any], seen: set) -> Optional[str]:
+    """The next page URL, or None at the end. A cursor that repeats would loop forever,
+    so it is treated as the end of the list (and logged)."""
+    nxt = (data.get("paging") or {}).get("next")
+    if not nxt:
+        return None
+    nxt = _without_token(nxt)
+    if nxt in seen:
+        log.warning("facebook paging returned a URL already fetched; stopping: %s", nxt)
+        return None
+    seen.add(nxt)
+    return nxt
 
 
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
@@ -82,12 +108,11 @@ class FacebookPageAdapter:
     def list_pages(self) -> List[Dict[str, Any]]:
         """Pages the token can manage: [{id, name, link, overall_star_rating, rating_count}]."""
         out, url, params = [], f"{self._base}/me/accounts", {"fields": "id,name,link,overall_star_rating,rating_count", "limit": 100}
+        seen: set = set()
         while url:
             data = self._request("GET", url, params=params)
             out.extend(data.get("data", []))
-            url, params = (data.get("paging") or {}).get("next"), None
-            if url and "access_token" in url:
-                url = url.split("access_token=")[0].rstrip("&?")  # _request re-adds it
+            url, params = _next_page(data, seen), None
         return out
 
     # -- reviews ------------------------------------------------------------
@@ -118,6 +143,7 @@ class FacebookPageAdapter:
         params: Optional[Dict[str, Any]] = {"fields": "created_time,recommendation_type,review_text,rating,reviewer{name,id},"
                                                       "open_graph_story{id,comments.limit(25){message,created_time,from}}", "limit": 100}
         any_yielded = False
+        seen: set = set()
         while url:
             data = self._request("GET", url, params=params, token=token)
             for raw in data.get("data", []):
@@ -127,9 +153,7 @@ class FacebookPageAdapter:
                 any_yielded = True
                 yield (nr, summary)
                 summary = None
-            url, params = (data.get("paging") or {}).get("next"), None
-            if url and "access_token" in url:
-                url = url.split("access_token=")[0].rstrip("&?")
+            url, params = _next_page(data, seen), None
         if not any_yielded and summary is not None:
             yield (NormalizedReview("__none__", None, True, None, None, datetime.utcnow(), datetime.utcnow(), None, None, "{}"), summary)
 

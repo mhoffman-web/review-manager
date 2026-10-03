@@ -223,8 +223,8 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     assert w3.first_replied_at == first_at and "reply_posted" in kinds and "reply_edited" in kinds
     # archive toggles with an undo link and an event; JSON form used by the keyboard shortcut
     a = c.post(f"/reviews/{r.id}/archive", headers={"Accept": "application/json"}).json()
-    assert a["ok"] and a["archived"] and a["undo"].endswith("/archive")
-    c.post(a["undo"], headers={"Accept": "application/json"})
+    assert a["ok"] and a["archived"] and isinstance(a["undo_archive"], int)
+    c.post(f"/reviews/{a['undo_archive']}/archive", headers={"Accept": "application/json"})
     s.expire_all()
     assert s.get(Review, r.id).is_archived is False and [e.kind for e in s.get(Review, r.id).events][-2:] == ["archived", "unarchived"]
     # report to Google: disputed reviews leave the figures until Google decides
@@ -297,3 +297,72 @@ def test_inbox_server_sort(db):
     assert html.index("Amy B") < html.index("Mel C") < html.index("Zed A")
     assert "sorted by reviewer" in html and 'data-server-sort' in html
     assert c.get("/?view=all&sort=bogus").status_code == 200
+
+
+def test_redirect_targets_and_script_json_are_safe(db):
+    """Open-redirect and script-breakout regressions."""
+    from fastapi.testclient import TestClient
+    from app.web import app, _safe_path
+    for bad in ("//evil.com", "/\\evil.com", "https://evil.com", "javascript:alert(1)", "evil.com", "/\tx", ""):
+        assert _safe_path(bad) == "/", bad
+    assert _safe_path("/?view=open&q=a%26b") == "/?view=open&q=a%26b"
+    s, loc, link = db
+    rid = mk(s, link, "xss", 2, "dirty car").id; s.commit()
+    c = TestClient(app)
+    r = c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026", "next": "//evil.com"}, follow_redirects=False)
+    assert r.headers["location"] == "/"
+    r = c.post(f"/reviews/{rid}/claim", data={"back": "//evil.com/x"}, follow_redirects=False)
+    assert r.headers["location"] == f"/reviews/{rid}"
+    r = c.post(f"/reviews/{rid}/archive", data={"back": "https://evil.com"}, follow_redirects=False)
+    assert r.headers["location"].startswith(f"/reviews/{rid}?") and "undo_archive=" in r.headers["location"]
+    assert "undo=%2F" not in r.headers["location"]
+    # a reviewer name that tries to close the script block is escaped inside the page's JSON
+    rv = s.get(Review, rid)
+    rv.author_name = "</script><script>alert(1)</script>"; s.commit()
+    page = c.get(f"/reviews/{rid}").text
+    assert "</script><script>alert(1)" not in page
+
+
+def test_api_keys_never_travel_in_urls(db):
+    from fastapi.testclient import TestClient
+    from app.web import app
+    s, loc, link = db
+    c = TestClient(app)
+    c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026"})
+    r = c.post("/admin/api", data={"name": "Teams Portal"}, follow_redirects=False)
+    assert r.status_code == 200 and r.headers.get("cache-control") == "no-store"
+    import re
+    raw = re.search(r'id="newKey"[^>]*>([^<]+)<', r.text).group(1)
+    assert raw.startswith("rm_") and raw not in c.get("/admin/api").text
+    anon = TestClient(app)
+    assert anon.get(f"/api/v1/sites?key={raw}").status_code == 400
+    assert anon.get("/api/v1/sites", headers={"X-API-Key": raw}).status_code == 200
+
+
+def test_search_values_survive_paging_and_post_and_next(db, monkeypatch):
+    """A search containing & # + % must stay intact in sort links, exports and the review queue."""
+    from fastapi.testclient import TestClient
+    from urllib.parse import parse_qs, urlsplit
+    from app.web import app
+    import app.web as web
+    monkeypatch.setattr(web, "get_adapter", lambda src: type("A", (), {"post_reply": lambda self, l, e, t: datetime.utcnow()})())
+    import html as _html, re
+    s, loc, link = db
+    a = mk(s, link, "q1", 2, "A&W #1 50% + more dirt", days_ago=2)
+    b = mk(s, link, "q2", 1, "A&W #1 50% + more dirt again", days_ago=1)
+    mk(s, link, "q3", 1, "unrelated", days_ago=0.5)
+    s.commit()
+    c = TestClient(app)
+    c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026"})
+    page = c.get("/", params={"view": "all", "q": "A&W #1 50% +"}).text
+    assert "q=A%26W+%231+50%25+%2B" in page
+    href = _html.unescape(re.search(r'href="(/reviews/%d\?ctx=[^"]+)"' % b.id, page).group(1))
+    ctx = parse_qs(urlsplit(href).query)["ctx"][0]
+    assert parse_qs(ctx)["q"] == ["A&W #1 50% +"]
+    rp = c.get(href).text
+    assert 'id="navNext"' in rp and f"/reviews/{a.id}?ctx=" in rp          # the filtered queue, not the whole inbox
+    r = c.post(f"/reviews/{b.id}/reply", data={"text": "Thanks for letting us know, we are on it.", "go_next": "1", "ctx": ctx, "force": "1"},
+               follow_redirects=False)
+    loc_hdr = r.headers["location"]
+    assert loc_hdr.startswith(f"/reviews/{a.id}?")
+    assert parse_qs(parse_qs(urlsplit(loc_hdr).query)["ctx"][0])["q"] == ["A&W #1 50% +"]

@@ -266,8 +266,8 @@ def _window_reviews(session: Session, dr: DateRange, brands: Optional[List[str]]
         q = q.where(or_(Review.report_status.is_(None), Review.report_status != "reported"))
     if brands:
         q = q.where(Location.brand.in_(brands))
-    if location_ids:
-        q = q.where(Location.id.in_(location_ids))
+    if location_ids is not None:          # [] = an empty scope, which matches nothing
+        q = q.where(Location.id.in_(location_ids or [-1]))
     return list(session.execute(q).scalars().all())
 
 
@@ -279,8 +279,8 @@ def disputed_count(session: Session, dr: DateRange, brands: Optional[List[str]] 
                 Review.created_at_source >= dr.start, Review.created_at_source < dr.end))
     if brands:
         q = q.where(Location.brand.in_(brands))
-    if location_ids:
-        q = q.where(Location.id.in_(location_ids))
+    if location_ids is not None:          # [] = an empty scope, which matches nothing
+        q = q.where(Location.id.in_(location_ids or [-1]))
     return session.execute(q).scalar() or 0
 
 
@@ -297,7 +297,7 @@ def recovery_stats(session: Session, dr: DateRange, brands: Optional[List[str]] 
         loc = r.location if r else None
         if brands and (not loc or loc.brand not in brands):
             continue
-        if location_ids and (not loc or loc.id not in location_ids):
+        if location_ids is not None and (not loc or loc.id not in location_ids):
             continue
         d = e.detail
         try:
@@ -329,7 +329,7 @@ def window_report(session: Session, dr: DateRange, brands: Optional[List[str]] =
                                  .options(selectinload(ReviewSourceLink.location))).scalars().all())
     if brands:
         links = [l for l in links if l.location and l.location.brand in brands]
-    if location_ids:
+    if location_ids is not None:
         links = [l for l in links if l.location and l.location.id in location_ids]
     rep = WindowReport(dr=dr, brands=brands or [])
     rows: Dict[str, SiteRow] = {}
@@ -533,8 +533,8 @@ def employee_report(session: Session, dr: DateRange, brands: Optional[List[str]]
                   selectinload(ReviewMention.employee)))
     if brands:
         q = q.where(Location.brand.in_(brands))
-    if location_ids:
-        q = q.where(Location.id.in_(location_ids))
+    if location_ids is not None:          # [] = an empty scope, which matches nothing
+        q = q.where(Location.id.in_(location_ids or [-1]))
     mentions = session.execute(q).scalars().all()
     by: Dict[str, Dict[str, Any]] = {}
     with_mentions: Set[int] = set()
