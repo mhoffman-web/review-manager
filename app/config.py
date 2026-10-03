@@ -61,6 +61,9 @@ class Settings:
     brand_phones: Dict[str, str] = field(default_factory=lambda: dict(
         kv.split("=", 1) for kv in _csv(os.getenv("BRAND_PHONES", "WashU=(815) 205-3492;ICON=(615) 776-7837;WA=(615) 776-7837").replace(";", ",")) if "=" in kv))
 
+    # Group negative reviews into the workbook categories with Claude as they arrive (needs the key).
+    ai_classify: bool = _bool(os.getenv("AI_CLASSIFY"), True)
+
     @property
     def ai_enabled(self) -> bool:
         return bool(self.anthropic_api_key)

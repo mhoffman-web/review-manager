@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .models import Review, ReviewSourceLink, SyncRun
 from .sources import get_adapter
 from .sources.base import NormalizedReview, ReviewSourceAdapter
-from .text_intel import apply_intel, build_roster
+from .text_intel import THEMES, apply_intel, build_roster
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,18 @@ def _apply(review: Review, nr: NormalizedReview, now: datetime) -> bool:
         changed = True
     review.last_seen_at = now
     return changed
+
+
+def _ai_classify(review: Review) -> None:
+    """Replace the keyword theme with Claude's category when AI is configured. Never fails the sync."""
+    from .config import settings
+    if not (settings.ai_enabled and settings.ai_classify and review.is_negative and (review.text or "").strip()):
+        return
+    try:
+        from .ai import classify_negative
+        review.category = classify_negative(review, THEMES)
+    except Exception as exc:  # keyword category from apply_intel stays
+        log.warning("AI classification skipped for review %s: %s", review.external_id, exc)
 
 
 def sync_link(
@@ -84,6 +96,7 @@ def sync_link(
                 session.add(review)
                 session.flush()
                 apply_intel(session, review, roster)
+                _ai_classify(review)
                 run.reviews_new += 1
             else:
                 if review.source_link_id != link.id:

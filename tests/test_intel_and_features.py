@@ -8,7 +8,8 @@ from app import auth
 from app.db import SessionLocal, engine, init_db
 from app.models import (AiRule, Base, Employee, Location, ReplyTemplate, Response, Review, ReviewMention,
                         ReviewSourceLink, SavedView, SiteGroup, User)
-from app.reports import employee_report, monthly_summary, responder_stats
+from app.daterange import resolve_range
+from app.reports import build_trends, employee_report, monthly_summary, responder_stats, window_report
 from app.text_intel import apply_intel, build_roster, classify_theme, detect_mentions, suggest_templates
 
 
@@ -55,9 +56,12 @@ def test_detect_mentions_cues_and_roster():
 
 def test_classify_theme_and_suggestions(db):
     s, loc, link = db
-    assert classify_theme("Waited 25 minutes in line, one lane open") == "Wait time"
-    assert classify_theme("Charged twice and nobody answered the phone") == "Billing / cancellation"
-    assert classify_theme("Great wash") is None
+    assert classify_theme("Waited 25 minutes in line, one lane open") == "Long Line"
+    assert classify_theme("Charged twice and nobody answered the phone") == "Billing/Cancellation"
+    assert classify_theme("Great wash") == "Unknown"
+    assert classify_theme(None) == "No Content"
+    assert classify_theme("Dryer left water streaks everywhere") == "Dryer"
+    assert classify_theme("Kiosk screen would not take my card") == "POS"
     tpls = [
         ReplyTemplate(name="5 general", min_rating=5, max_rating=5, tags="general", body="Thanks {first_name}"),
         ReplyTemplate(name="5 employee", min_rating=5, max_rating=5, tags="employee", body="Thanks for recognising {employee}"),
@@ -78,7 +82,7 @@ def test_classify_theme_and_suggestions(db):
     assert suggest_templates(r2, tpls, [])[0][0].name == "5 rating only"
     r3 = mk(s, link, "c", 1, "Charged twice this month. Called and nobody answered.", author="Sam K")
     apply_intel(s, r3, build_roster(s))
-    assert r3.category == "Billing / cancellation"
+    assert r3.category == "Billing/Cancellation"
     assert suggest_templates(r3, tpls, [])[0][0].name == "Sorry billing"
 
 
@@ -89,7 +93,7 @@ def test_employee_report_and_monthly(db):
         r = mk(s, link, f"m{i}", 5, text, author="Casey L", days_ago=2 + i, replied=True)
         apply_intel(s, r, roster)
     s.commit()
-    rep = employee_report(s, days=30)
+    rep = employee_report(s, resolve_range("last30"))
     names = {row["name"]: row for row in rep["rows"]}
     assert names["Jared"]["count"] == 2 and names["Jared"]["on_roster"]
     assert names["Gregory Banks"]["count"] == 1
@@ -97,6 +101,16 @@ def test_employee_report_and_monthly(db):
     assert rep["reviews_with_mentions"] == 3 and rep["reviews_with_text"] == 4
     months = monthly_summary(s, months=3)
     assert months and months[0]["n"] >= 1 and months[0]["response_rate"] == 100
+    w = window_report(s, resolve_range("last30"))
+    assert w.count == 5 and w.response_rate == 100 and w.mention_reviews == 3
+    t = build_trends(s, resolve_range("last30"))
+    assert t["granularity"] == "day" and sum(t["counts"]["ICON"]) == 5 and len(t["labels"]) == 30
+    assert build_trends(s, resolve_range("last_quarter"))["granularity"] == "week"
+    # custom window containing only the two newest reviews
+    from datetime import date
+    cutoff = (datetime.utcnow() - timedelta(days=3.5)).date().isoformat()
+    w2 = window_report(s, resolve_range("custom", cutoff, date.today().isoformat()))
+    assert w2.count == 2
 
 
 def test_web_views_archive_draft_and_admin(db, monkeypatch):
@@ -134,17 +148,27 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     c.post(f"/reviews/{r.id}/reply", data={"text": "Sorry about the wait", "template_id": str(tpl.id), "ai_generated": "0"}, follow_redirects=False)
     s.expire_all()
     assert s.get(ReplyTemplate, tpl.id).usage_count == 1
-    assert responder_stats(s, days=1)[0]["count"] == 1
+    assert responder_stats(s, resolve_range("today"))[0]["count"] == 1
     # admin pages + employee promote + group
     for path in ["/admin/employees", "/admin/groups", "/admin/ai", "/admin/templates", "/reports", "/reports/employees", f"/sites/{loc.id}"]:
         assert c.get(path).status_code == 200, path
     c.post("/admin/employees", data={"name": "Eli", "location_id": str(loc.id), "aliases": "", "role": "", "active": "1"}, follow_redirects=False)
-    c.post("/admin/groups", data={"name": "Nashville", "description": "", "location_ids": [str(loc.id)]}, follow_redirects=False)
+    # quick group creation from the inbox (any signed-in user)
+    r2 = c.post("/groups", data={"name": "Nashville", "location_ids": [str(loc.id)], "back": "/?view=all"}, follow_redirects=False)
+    assert r2.status_code == 303 and "group_id=" in r2.headers["location"]
     s.expire_all()
     assert s.execute(select(Employee).where(Employee.name == "Eli")).scalar_one_or_none() is not None
     g = s.execute(select(SiteGroup)).scalar_one()
     assert [l.id for l in g.locations] == [loc.id]
     assert c.get(f"/?group_id={g.id}&view=all").status_code == 200
+    # date-range filters on inbox and reports, including a custom window
+    assert "Line wrapped" in c.get("/?view=all&range=last7").text
+    assert "Line wrapped" not in c.get("/?view=all&range=custom&start=2020-01-01&end=2020-01-31").text
+    for path in ["/reports?range=last_month", "/reports?range=custom&start=2026-09-01&end=2026-09-15&brand=ICON", f"/sites/{loc.id}?range=ytd", "/reports/employees?range=last_week"]:
+        assert c.get(path).status_code == 200, path
+    mk(s, link, "w3", 4, "Nice wash, quick line", author="Kim Z", days_ago=0.2); s.commit()
+    page = c.get("/?view=all").text
+    assert "Reviewer" in page and "Reply to review" in page and "Claim" not in page and "New site group" in page
 
 
 def test_inbox_server_sort(db):
@@ -164,5 +188,5 @@ def test_inbox_server_sort(db):
     assert html.index("Alpha great") < html.index("Gamma meh") < html.index("Beta awful")
     html = c.get("/?view=all&sort=author&dir=asc").text
     assert html.index("Amy B") < html.index("Mel C") < html.index("Zed A")
-    assert "sorted by author" in html and 'data-server-sort' in html
+    assert "sorted by reviewer" in html and 'data-server-sort' in html
     assert c.get("/?view=all&sort=bogus").status_code == 200

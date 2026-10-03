@@ -82,3 +82,43 @@ def draft_reply(review: Review, rules: Optional[Sequence[AiRule]] = None,
     if not text:
         raise AiUnavailable("Empty draft returned")
     return text.strip().strip('"')
+
+
+def classify_negative(review: Review, categories: Sequence[str]) -> str:
+    """Ask Claude which workbook category a negative review belongs to. Returns one
+    of `categories` exactly; raises AiUnavailable when the model cannot be used."""
+    if not settings.ai_enabled:
+        raise AiUnavailable("ANTHROPIC_API_KEY is not configured")
+    import anthropic
+    text = (review.text or "").strip()
+    if not text:
+        return "No Content"
+    cats = "\n".join(f"- {c}" for c in categories)
+    system = ("You classify negative car wash customer reviews into exactly one reporting category. "
+              "Reply with the category name only, copied exactly from the list, nothing else.\n\nCategories:\n" + cats +
+              "\n\nGuidance: Long Line = waiting, slow tunnel, one lane open. Wash Quality = dirt/soap left, poor wash. "
+              "Dryer = water left, streaks. Vacuum = vacuums/towels/mats. Damage = vehicle damaged or claim handling. "
+              "Billing/Cancellation = charges, refunds, cancelling a plan. Pricing = price level or increases. "
+              "POS = pay station, kiosk, card reader, receipts. LPR/Access Issues = plate reader, gate, membership not recognised. "
+              "Customer Service = staff behaviour, no response, management. Closure = closed, out of order, hours. "
+              "Unknown = negative but none of the above fits.")
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    try:
+        response = client.messages.create(model=settings.ai_model, max_tokens=20, system=system,
+                                          messages=[{"role": "user", "content": f"Rating: {review.rating} of 5\nReview: {text}"}])
+    except anthropic.RateLimitError as exc:
+        raise AiUnavailable("Rate limited by the AI service") from exc
+    except anthropic.APIStatusError as exc:
+        raise AiUnavailable(f"AI service error {exc.status_code}") from exc
+    except anthropic.APIConnectionError as exc:
+        raise AiUnavailable("Could not reach the AI service") from exc
+    if response.stop_reason == "refusal":
+        raise AiUnavailable("The model declined to classify this review")
+    answer = "".join(b.text for b in response.content if b.type == "text").strip().strip(".").strip('"')
+    for c in categories:
+        if answer.lower() == c.lower():
+            return c
+    for c in categories:                      # tolerate "Category: Long Line" style answers
+        if c.lower() in answer.lower():
+            return c
+    return "Unknown"

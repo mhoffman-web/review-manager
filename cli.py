@@ -161,6 +161,34 @@ def cmd_send_report(a):
         print(f"{snd.status}: {snd.recipients}" + (f" ({snd.error})" if snd.error else ""))
 
 
+def cmd_classify(a):
+    """Group negative reviews in a window into the workbook categories with Claude."""
+    from app.ai import AiUnavailable, classify_negative
+    from app.daterange import resolve_range
+    from app.models import Review
+    from app.text_intel import THEMES
+    dr = resolve_range(a.range, a.start or "", a.end or "")
+    done = skipped = failed = 0
+    with session_scope() as s:
+        q = select(Review).where(Review.is_deleted.is_(False), Review.rating <= settings.negative_rating_max,
+                                 Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
+        for r in s.execute(q).scalars().all():
+            if not (r.text or "").strip():
+                if r.category != "No Content":
+                    r.category = "No Content"; done += 1
+                continue
+            if r.category and not a.force and r.category not in ("Unknown", None):
+                skipped += 1; continue
+            try:
+                r.category = classify_negative(r, THEMES); done += 1
+            except AiUnavailable as exc:
+                failed += 1
+                log.warning("%s", exc)
+                if "not configured" in str(exc):
+                    break
+    print(f"{dr.label}: classified {done}, kept {skipped}, failed {failed}")
+
+
 def cmd_worker(_a):
     from app.worker import run_forever
     run_forever()
@@ -185,6 +213,7 @@ def main():
     sp = sub.add_parser("sync", help="incremental pull"); sp.add_argument("--source"); sp.add_argument("--full", action="store_true"); sp.set_defaults(fn=lambda a: cmd_sync(a, full=a.full))
     sp = sub.add_parser("add-recipient"); sp.add_argument("--email", required=True); sp.add_argument("--name"); sp.add_argument("--brands", help='e.g. "WashU" or "ICON;WA"'); sp.add_argument("--remove", action="store_true"); sp.set_defaults(fn=cmd_add_recipient)
     sp = sub.add_parser("send-report"); sp.add_argument("--dry-run", action="store_true"); sp.add_argument("--out", help="also write the HTML here"); sp.add_argument("--to", help="comma list, overrides stored recipients"); sp.set_defaults(fn=cmd_send_report)
+    sp = sub.add_parser("classify-negatives", help="AI-group negative reviews into workbook categories"); sp.add_argument("--range", default="last30"); sp.add_argument("--start"); sp.add_argument("--end"); sp.add_argument("--force", action="store_true", help="re-classify reviews that already have a category"); sp.set_defaults(fn=cmd_classify)
     sub.add_parser("worker").set_defaults(fn=cmd_worker)
     sp = sub.add_parser("web"); sp.add_argument("--host", default="127.0.0.1"); sp.add_argument("--port", type=int, default=8000); sp.add_argument("--reload", action="store_true"); sp.set_defaults(fn=cmd_web)
     a = p.parse_args()

@@ -11,8 +11,6 @@
       <span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|local }} ({{ r.created_at_source|age }} ago){% if r.was_edited %} · <span class="pill small">Updated {{ r.updated_at_source|local('%b %-d') }}</span>{% endif %}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
       {% if r.is_archived %}<span class="pill">Archived{% if r.archived_at %} {{ r.archived_at|local('%b %-d') }}{% endif %}</span>{% endif %}
-      {% if r.assigned_to %}<span class="pill {% if r.assigned_to_id==user.id %}me{% endif %}">Handled by {{ r.assigned_to.name }}</span>{% endif %}
-      {% if not r.has_owner_reply and not r.is_archived %}<form method="post" action="/reviews/{{ r.id }}/claim" style="display:inline"><button class="ghost small">{% if r.assigned_to_id==user.id %}Release{% elif r.assigned_to %}Take over{% else %}Claim{% endif %}</button></form>{% endif %}
       {% if not r.has_owner_reply %}<form method="post" action="/reviews/{{ r.id }}/archive" style="display:inline"><button class="ghost small" title="{% if r.is_archived %}Put it back in the inbox{% else %}Skip replying; stops counting as unanswered{% endif %}">{% if r.is_archived %}Unarchive{% else %}Archive{% endif %}</button></form>{% endif %}
       </span>
     </div>

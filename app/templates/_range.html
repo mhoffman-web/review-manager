@@ -1,0 +1,9 @@
+{# Date-range control shared by inbox, reports, sites and team. Emits fields only; place inside a GET form. #}
+{% macro range_fields(dr, allow_any=False) -%}
+<select name="range" class="range-preset" onchange="if(this.value!=='custom'){this.form.querySelectorAll('input[type=date]').forEach(function(i){i.value='';});this.form.submit();}">
+  {% if allow_any %}<option value="" {% if not dr %}selected{% endif %}>Any time</option>{% endif %}
+  {% for key, label in PRESETS %}<option value="{{ key }}" {% if dr and dr.preset==key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+<span class="range-custom"><input type="date" name="start" value="{{ dr.start_date.isoformat() if dr and dr.is_custom else '' }}" aria-label="From" onchange="this.form.querySelector('.range-preset').value='custom'"><span class="muted">to</span><input type="date" name="end" value="{{ dr.end_date.isoformat() if dr and dr.is_custom else '' }}" aria-label="To" onchange="this.form.querySelector('.range-preset').value='custom'"></span>
+{%- endmacro %}
+{% macro range_label(dr) -%}{% if dr %}{{ dr.label }}{% if not dr.is_custom and dr.preset not in ['today','yesterday'] %} <span class="muted">({{ dr.start_date.strftime('%b %-d') }} – {{ dr.end_date.strftime('%b %-d') }})</span>{% endif %}{% else %}Any time{% endif %}{%- endmacro %}

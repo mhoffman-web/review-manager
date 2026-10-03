@@ -15,7 +15,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
+from .daterange import DateRange
 from .models import Employee, Location, ReportRecipient, ReportSend, Response, Review, ReviewMention, ReviewSourceLink, User
+from .text_intel import THEMES
 
 log = logging.getLogger(__name__)
 
@@ -223,81 +225,282 @@ def build_report(session: Session, brands: Optional[List[str]] = None, as_of_utc
     return data
 
 
-# ----------------------------------------------------------------------------- trends
-def week_start(d: datetime) -> datetime:
-    d = d.replace(hour=0, minute=0, second=0, microsecond=0)
-    return d - timedelta(days=d.weekday())
+# ----------------------------------------------------------------------------- windowed report (date-range driven)
+@dataclass
+class WindowReport:
+    dr: DateRange
+    brands: List[str]
+    count: int = 0
+    avg: Optional[float] = None
+    negatives: int = 0
+    negative_pct: Optional[float] = None
+    answered: int = 0
+    response_rate: Optional[float] = None
+    median_response_h: Optional[float] = None
+    p90_response_h: Optional[float] = None
+    promoter_pct: Optional[float] = None
+    passive_pct: Optional[float] = None
+    detractor_pct: Optional[float] = None
+    nps: Optional[float] = None
+    rating_only_pct: Optional[float] = None
+    unanswered_now: int = 0          # open reviews from the window still without a reply
+    overdue_now: int = 0
+    sites: List[SiteRow] = field(default_factory=list)
+    categories: List[str] = field(default_factory=lambda: list(THEMES))
+    themes: List[Any] = field(default_factory=list)                 # [(category, count)] negatives in window
+    theme_matrix: Dict[str, Dict[str, int]] = field(default_factory=dict)   # site -> category -> count
+    negative_reviews: List[Review] = field(default_factory=list)
+    mention_reviews: int = 0
 
 
-def build_trends(session: Session, brands: Optional[List[str]] = None, weeks: int = 12,
-                 location_id: Optional[int] = None, as_of_utc: Optional[datetime] = None) -> Dict[str, Any]:
-    """Weekly series for the dashboard charts. JSON-serializable."""
+def _window_reviews(session: Session, dr: DateRange, brands: Optional[List[str]], location_ids: Optional[List[int]]) -> List[Review]:
+    q = (select(Review)
+         .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
+         .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
+         .where(Review.is_deleted.is_(False), ReviewSourceLink.active.is_(True),
+                Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
+         .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location), selectinload(Review.mentions)))
+    if brands:
+        q = q.where(Location.brand.in_(brands))
+    if location_ids:
+        q = q.where(Location.id.in_(location_ids))
+    return list(session.execute(q).scalars().all())
+
+
+def window_report(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None,
+                  as_of_utc: Optional[datetime] = None) -> WindowReport:
     as_of_utc = as_of_utc or datetime.utcnow()
-    start = week_start(as_of_utc - timedelta(weeks=weeks - 1))
-    reviews = _load_reviews(session, start, brands, location_id=location_id, include_unanswered=False)
-    labels = [start + timedelta(weeks=i) for i in range(weeks)]
-    idx = {wk: i for i, wk in enumerate(labels)}
+    overdue_cut = as_of_utc - timedelta(hours=settings.overdue_hours)
+    reviews = _window_reviews(session, dr, brands, location_ids)
+    links = list(session.execute(select(ReviewSourceLink).where(ReviewSourceLink.active.is_(True))
+                                 .options(selectinload(ReviewSourceLink.location))).scalars().all())
+    if brands:
+        links = [l for l in links if l.location and l.location.brand in brands]
+    if location_ids:
+        links = [l for l in links if l.location and l.location.id in location_ids]
+    rep = WindowReport(dr=dr, brands=brands or [])
+    rows: Dict[str, SiteRow] = {}
+    for link in links:
+        name = link.location.name if link.location else (link.display_name or link.external_location_id)
+        row = rows.setdefault(name, SiteRow(name=name, brand=link.location.brand if link.location else "?", location_id=link.location_id))
+        row.listing_avg, row.listing_total = link.avg_rating, link.total_review_count
+    by_site: Dict[str, List[Review]] = defaultdict(list)
+    ratings, resp_h = [], []
+    themes: Counter = Counter()
+    matrix: Dict[str, Counter] = defaultdict(Counter)
+    for r in reviews:
+        name = _site_name(r)
+        row = rows.setdefault(name, SiteRow(name=name, brand=r.location.brand if r.location else "?", location_id=r.location.id if r.location else None))
+        by_site[name].append(r)
+        row.count_30d += 1
+        if r.rating:
+            ratings.append(r.rating)
+        if r.has_owner_reply:
+            row.answered_30d += 1
+            if r.response_hours is not None:
+                resp_h.append(r.response_hours)
+        elif not r.is_archived:
+            row.unanswered += 1
+            rep.unanswered_now += 1
+            if r.created_at_source < overdue_cut:
+                row.overdue += 1
+                rep.overdue_now += 1
+        if r.is_negative:
+            row.negative_30d += 1
+            cat = r.category or ("No Content" if r.is_rating_only else "Unknown")
+            themes[cat] += 1
+            matrix[name][cat] += 1
+            rep.negative_reviews.append(r)
+        if r.mentions:
+            rep.mention_reviews += 1
+    for name, row in rows.items():
+        rs = by_site.get(name, [])
+        row.avg_30d = _avg([r.rating for r in rs])
+        row.median_response_h_30d = _median([r.response_hours for r in rs if r.has_owner_reply])
+        if row.count_30d:
+            row.response_rate_30d = round(100.0 * row.answered_30d / row.count_30d, 0)
+    rep.count = len(reviews)
+    rep.avg = _avg(ratings)
+    rep.negatives = sum(1 for r in reviews if r.is_negative)
+    rep.negative_pct = round(100.0 * rep.negatives / rep.count, 1) if rep.count else None
+    rep.answered = sum(1 for r in reviews if r.has_owner_reply)
+    rep.response_rate = round(100.0 * rep.answered / rep.count, 0) if rep.count else None
+    rep.median_response_h = _median(resp_h)
+    rep.p90_response_h = _pct(resp_h, 0.9)
+    if ratings:
+        pro = sum(1 for x in ratings if x == 5) / len(ratings)
+        det = sum(1 for x in ratings if x <= 3) / len(ratings)
+        rep.promoter_pct, rep.detractor_pct = round(100 * pro, 1), round(100 * det, 1)
+        rep.passive_pct = round(100 * (1 - pro - det), 1)
+        rep.nps = round(100 * (pro - det), 1)
+    if reviews:
+        rep.rating_only_pct = round(100.0 * sum(1 for r in reviews if r.is_rating_only) / len(reviews), 0)
+    rep.themes = [(c, themes[c]) for c in THEMES if themes[c]] + [(c, n) for c, n in themes.items() if c not in THEMES]
+    rep.theme_matrix = {k: dict(v) for k, v in matrix.items()}
+    rep.negative_reviews.sort(key=lambda r: r.created_at_source, reverse=True)
+    rep.sites = sorted(rows.values(), key=lambda s: (BRAND_ORDER.index(s.brand) if s.brand in BRAND_ORDER else 9, s.name))
+    return rep
 
-    present_brands = sorted({r.location.brand for r in reviews if r.location}, key=lambda b: BRAND_ORDER.index(b) if b in BRAND_ORDER else 9)
-    ratings: Dict[str, List[List[int]]] = {b: [[] for _ in labels] for b in present_brands}
-    counts: Dict[str, List[int]] = {b: [0] * weeks for b in present_brands}
-    answered = [0] * weeks
-    total = [0] * weeks
+
+# ----------------------------------------------------------------------------- trends (daily / weekly / monthly buckets)
+def _local_date(utc_naive: datetime):
+    return utc_naive.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(settings.timezone)).date()
+
+
+def _bucket_of(d, gran: str):
+    """Bucket key (a local date) for a local date."""
+    if gran == "week":
+        return d - timedelta(days=d.weekday())
+    if gran == "month":
+        return d.replace(day=1)
+    return d
+
+
+def _bucket_labels(dr: DateRange, gran: str) -> list:
+    cur = _bucket_of(dr.start_date, gran)
+    out = []
+    while cur <= dr.end_date:
+        out.append(cur)
+        if gran == "day":
+            cur = cur + timedelta(days=1)
+        elif gran == "week":
+            cur = cur + timedelta(weeks=1)
+        else:
+            cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return out
+
+
+def build_trends(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    gran = dr.granularity
+    reviews = _window_reviews(session, dr, brands, location_ids)
+    labels = _bucket_labels(dr, gran)
+    idx = {b: i for i, b in enumerate(labels)}
+    n = len(labels)
+    present = sorted({r.location.brand for r in reviews if r.location}, key=lambda b: BRAND_ORDER.index(b) if b in BRAND_ORDER else 9)
+    ratings: Dict[str, List[List[int]]] = {b: [[] for _ in labels] for b in present}
+    counts: Dict[str, List[int]] = {b: [0] * n for b in present}
+    negatives = [0] * n
+    answered = [0] * n
+    total = [0] * n
     resp_hours: List[List[float]] = [[] for _ in labels]
     dist = [0, 0, 0, 0, 0]
-    d30 = as_of_utc - timedelta(days=30)
     for r in reviews:
-        wk = week_start(r.created_at_source)
-        i = idx.get(wk)
+        i = idx.get(_bucket_of(_local_date(r.created_at_source), gran))
         if i is None or not r.location:
             continue
         b = r.location.brand
         if r.rating:
             ratings[b][i].append(r.rating)
-            if r.created_at_source >= d30:
-                dist[r.rating - 1] += 1
+            dist[r.rating - 1] += 1
+            if r.rating <= settings.negative_rating_max:
+                negatives[i] += 1
         counts[b][i] += 1
         total[i] += 1
         if r.has_owner_reply:
             answered[i] += 1
             if r.response_hours is not None:
                 resp_hours[i].append(r.response_hours)
-
+    fmt = {"day": "%b %-d", "week": "%b %-d", "month": "%b %Y"}[gran]
     return {
-        "labels": [d.strftime("%b %-d") for d in labels],
-        "brands": present_brands,
-        "colors": {b: BRAND_COLORS.get(b, {"light": "#52514e", "dark": "#c3c2b7"}) for b in present_brands},
-        "avg_rating": {b: [_avg(cell) for cell in ratings[b]] for b in present_brands},
+        "granularity": gran,
+        "labels": [d.strftime(fmt) for d in labels],
+        "brands": present,
+        "colors": {b: BRAND_COLORS.get(b, {"light": "#52514e", "dark": "#c3c2b7"}) for b in present},
+        "avg_rating": {b: [_avg(cell) for cell in ratings[b]] for b in present},
         "counts": counts,
+        "negatives": negatives,
         "response_rate": [round(100.0 * a / t, 0) if t else None for a, t in zip(answered, total)],
         "median_response_h": [_median(h) for h in resp_hours],
-        "rating_dist_30d": dist,
+        "rating_dist": dist,
     }
 
 
-# ----------------------------------------------------------------------------- site page
-def site_summary(session: Session, location: Location, days: int = 90, as_of_utc: Optional[datetime] = None) -> Dict[str, Any]:
-    as_of_utc = as_of_utc or datetime.utcnow()
-    since = as_of_utc - timedelta(days=days)
-    reviews = _load_reviews(session, since, location_id=location.id)
-    in_window = [r for r in reviews if r.created_at_source >= since]
-    answered = [r for r in in_window if r.has_owner_reply]
-    themes = Counter(r.category for r in in_window if r.is_negative and r.category)
-    links = [l for l in location.sources if l.active]
-    return {
-        "count": len(in_window),
-        "avg": _avg([r.rating for r in in_window]),
-        "negative": sum(1 for r in in_window if r.is_negative),
-        "response_rate": round(100.0 * len(answered) / len(in_window), 0) if in_window else None,
-        "median_response_h": _median([r.response_hours for r in answered]),
-        "unanswered": sum(1 for r in reviews if not r.has_owner_reply and not r.is_archived),
-        "dist": [sum(1 for r in in_window if r.rating == s) for s in (1, 2, 3, 4, 5)],
-        "themes": themes.most_common(5),
-        "recent": sorted(reviews, key=lambda r: r.created_at_source, reverse=True)[:25],
-        "listing_avg": links[0].avg_rating if links else None,
-        "listing_total": links[0].total_review_count if links else None,
-        "listing_url": links[0].listing_url if links else None,
-    }
+def location_rank(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+    by: Dict[str, Dict[str, Any]] = {}
+    for r in _window_reviews(session, dr, brands, location_ids):
+        name = _site_name(r)
+        b = by.setdefault(name, {"name": name, "brand": r.location.brand if r.location else "?", "location_id": r.location.id if r.location else None, "ratings": []})
+        if r.rating:
+            b["ratings"].append(r.rating)
+    rows = [{"name": b["name"], "brand": b["brand"], "location_id": b["location_id"], "avg": _avg(b["ratings"]), "n": len(b["ratings"])} for b in by.values()]
+    rows.sort(key=lambda x: (-(x["avg"] or 0), -x["n"]))
+    return rows
+
+
+def responder_stats(session: Session, dr: DateRange) -> List[Dict[str, Any]]:
+    """Replies posted through this app in the window, by agent."""
+    rows = session.execute(
+        select(Response).where(Response.status == "posted", Response.posted_at >= dr.start, Response.posted_at < dr.end)
+        .options(selectinload(Response.review), selectinload(Response.created_by))
+    ).scalars().all()
+    by: Dict[str, Dict[str, Any]] = {}
+    for resp in rows:
+        who = resp.created_by.name if resp.created_by else "Unknown"
+        b = by.setdefault(who, {"name": who, "count": 0, "hours": [], "ai": 0, "template": 0, "negatives": 0})
+        b["count"] += 1
+        if resp.review and resp.posted_at and resp.review.created_at_source:
+            b["hours"].append(max(0.0, (resp.posted_at - resp.review.created_at_source).total_seconds() / 3600))
+        if resp.ai_generated:
+            b["ai"] += 1
+        if resp.template_id:
+            b["template"] += 1
+        if resp.review and resp.review.is_negative:
+            b["negatives"] += 1
+    out = [{"name": b["name"], "count": b["count"], "median_h": _median(b["hours"]), "p90_h": _pct(b["hours"], 0.9),
+            "ai_pct": round(100.0 * b["ai"] / b["count"]) if b["count"] else 0,
+            "template_pct": round(100.0 * b["template"] / b["count"]) if b["count"] else 0, "negatives": b["negatives"]} for b in by.values()]
+    out.sort(key=lambda x: -x["count"])
+    return out
+
+
+def employee_report(session: Session, dr: DateRange, brands: Optional[List[str]] = None, location_ids: Optional[List[int]] = None) -> Dict[str, Any]:
+    """Who customers name in reviews. Powered by review_mentions."""
+    q = (select(ReviewMention)
+         .join(Review, ReviewMention.review_id == Review.id)
+         .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
+         .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
+         .where(Review.is_deleted.is_(False), Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
+         .options(selectinload(ReviewMention.review).selectinload(Review.source_link).selectinload(ReviewSourceLink.location),
+                  selectinload(ReviewMention.employee)))
+    if brands:
+        q = q.where(Location.brand.in_(brands))
+    if location_ids:
+        q = q.where(Location.id.in_(location_ids))
+    mentions = session.execute(q).scalars().all()
+    by: Dict[str, Dict[str, Any]] = {}
+    with_mentions: Set[int] = set()
+    for m in mentions:
+        r = m.review
+        key = m.employee.name if m.employee else m.name
+        b = by.setdefault(key, {"name": key, "on_roster": m.employee is not None, "employee_id": m.employee_id, "sites": Counter(),
+                                "count": 0, "ratings": [], "last": None, "negatives": 0, "examples": []})
+        b["count"] += 1
+        b["sites"][_site_name(r)] += 1
+        if r.rating:
+            b["ratings"].append(r.rating)
+            if r.rating <= settings.negative_rating_max:
+                b["negatives"] += 1
+        if b["last"] is None or r.created_at_source > b["last"]:
+            b["last"] = r.created_at_source
+        if len(b["examples"]) < 3 and r.text:
+            b["examples"].append(r)
+        with_mentions.add(r.id)
+    rows = [{"name": b["name"], "on_roster": b["on_roster"], "employee_id": b["employee_id"], "count": b["count"], "avg": _avg(b["ratings"]),
+             "negatives": b["negatives"], "last": b["last"],
+             "sites": ", ".join(f"{k} ({v})" if len(b["sites"]) > 1 else k for k, v in b["sites"].most_common(3)),
+             "primary_site": b["sites"].most_common(1)[0][0] if b["sites"] else "", "examples": b["examples"]} for b in by.values()]
+    rows.sort(key=lambda x: (-x["count"], x["name"]))
+    reviews = _window_reviews(session, dr, brands, location_ids)
+    with_text = [r for r in reviews if not r.is_rating_only]
+    site_rate: Dict[str, Dict[str, int]] = {}
+    for r in reviews:
+        sr = site_rate.setdefault(_site_name(r), {"reviews": 0, "with_mentions": 0})
+        sr["reviews"] += 1
+        if r.id in with_mentions:
+            sr["with_mentions"] += 1
+    sites = sorted(({"name": k, **v, "pct": round(100.0 * v["with_mentions"] / v["reviews"]) if v["reviews"] else 0} for k, v in site_rate.items()), key=lambda x: -x["pct"])
+    return {"rows": rows, "total_mentions": len(mentions), "reviews_with_mentions": len(with_mentions), "reviews_with_text": len(with_text),
+            "pct_of_text_reviews": round(100.0 * len(with_mentions) / len(with_text)) if with_text else 0, "sites": sites}
 
 
 # ----------------------------------------------------------------------------- email
@@ -383,34 +586,29 @@ def already_sent_today(session: Session) -> bool:
     return row is not None
 
 
-# ----------------------------------------------------------------------------- extra report builders
+# ----------------------------------------------------------------------------- monthly summary (fixed 12 months, for the table)
 def monthly_summary(session: Session, brands: Optional[List[str]] = None, months: int = 12,
-                    as_of_utc: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """Synup-style 'summary by time period': one row per month, newest first."""
+                    as_of_utc: Optional[datetime] = None, location_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     as_of_utc = as_of_utc or datetime.utcnow()
-    first = (as_of_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0))
-    # walk back months-1 months
+    first = as_of_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     y, m = first.year, first.month
     for _ in range(months - 1):
         m -= 1
         if m == 0:
             m, y = 12, y - 1
     start = first.replace(year=y, month=m)
-    reviews = _load_reviews(session, start, brands, include_unanswered=False)
+    from .daterange import DateRange as _DR
+    dr = _DR(preset="custom", start_date=start.date(), end_date=as_of_utc.date(), start=start, end=as_of_utc + timedelta(seconds=1), label="")
     buckets: Dict[str, Dict[str, Any]] = {}
-    for r in reviews:
+    for r in _window_reviews(session, dr, brands, location_ids):
         key = r.created_at_source.strftime("%Y-%m")
-        b = buckets.setdefault(key, {"month": key, "label": r.created_at_source.strftime("%b %Y"), "ratings": [], "n": 0,
-                                     "positive": 0, "neutral": 0, "negative": 0, "answered": 0, "resp_h": []})
+        b = buckets.setdefault(key, {"month": key, "label": r.created_at_source.strftime("%b %Y"), "ratings": [], "n": 0, "positive": 0, "neutral": 0, "negative": 0, "answered": 0, "resp_h": []})
         b["n"] += 1
         if r.rating:
             b["ratings"].append(r.rating)
-            if r.rating >= 4:
-                b["positive"] += 1
-            elif r.rating == 3:
-                b["neutral"] += 1
-            else:
-                b["negative"] += 1
+            if r.rating >= 4: b["positive"] += 1
+            elif r.rating == 3: b["neutral"] += 1
+            else: b["negative"] += 1
         if r.has_owner_reply:
             b["answered"] += 1
             if r.response_hours is not None:
@@ -418,116 +616,6 @@ def monthly_summary(session: Session, brands: Optional[List[str]] = None, months
     rows = []
     for key in sorted(buckets, reverse=True):
         b = buckets[key]
-        rows.append({"month": b["month"], "label": b["label"], "n": b["n"], "avg": _avg(b["ratings"]),
-                     "positive": b["positive"], "neutral": b["neutral"], "negative": b["negative"],
-                     "response_rate": round(100.0 * b["answered"] / b["n"], 0) if b["n"] else None,
-                     "median_response_h": _median(b["resp_h"])})
+        rows.append({"month": b["month"], "label": b["label"], "n": b["n"], "avg": _avg(b["ratings"]), "positive": b["positive"], "neutral": b["neutral"],
+                     "negative": b["negative"], "response_rate": round(100.0 * b["answered"] / b["n"], 0) if b["n"] else None, "median_response_h": _median(b["resp_h"])})
     return rows
-
-
-def responder_stats(session: Session, days: int = 30, as_of_utc: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """Replies posted through this app, by agent: count, median hours from review to reply, AI/template share."""
-    as_of_utc = as_of_utc or datetime.utcnow()
-    since = as_of_utc - timedelta(days=days)
-    rows = session.execute(
-        select(Response).where(Response.status == "posted", Response.posted_at >= since)
-        .options(selectinload(Response.review), selectinload(Response.created_by))
-    ).scalars().all()
-    by: Dict[str, Dict[str, Any]] = {}
-    for resp in rows:
-        who = resp.created_by.name if resp.created_by else "Unknown"
-        b = by.setdefault(who, {"name": who, "count": 0, "hours": [], "ai": 0, "template": 0, "negatives": 0})
-        b["count"] += 1
-        if resp.review and resp.posted_at and resp.review.created_at_source:
-            b["hours"].append(max(0.0, (resp.posted_at - resp.review.created_at_source).total_seconds() / 3600))
-        if resp.ai_generated:
-            b["ai"] += 1
-        if resp.template_id:
-            b["template"] += 1
-        if resp.review and resp.review.is_negative:
-            b["negatives"] += 1
-    out = []
-    for b in by.values():
-        out.append({"name": b["name"], "count": b["count"], "median_h": _median(b["hours"]), "p90_h": _pct(b["hours"], 0.9),
-                    "ai_pct": round(100.0 * b["ai"] / b["count"]) if b["count"] else 0,
-                    "template_pct": round(100.0 * b["template"] / b["count"]) if b["count"] else 0, "negatives": b["negatives"]})
-    out.sort(key=lambda x: -x["count"])
-    return out
-
-
-def location_rank(session: Session, days: int = 365, brands: Optional[List[str]] = None,
-                  as_of_utc: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    as_of_utc = as_of_utc or datetime.utcnow()
-    since = as_of_utc - timedelta(days=days)
-    reviews = _load_reviews(session, since, brands, include_unanswered=False)
-    by: Dict[str, Dict[str, Any]] = {}
-    for r in reviews:
-        if r.created_at_source < since:
-            continue
-        name = _site_name(r)
-        b = by.setdefault(name, {"name": name, "brand": r.location.brand if r.location else "?", "location_id": r.location.id if r.location else None, "ratings": []})
-        if r.rating:
-            b["ratings"].append(r.rating)
-    rows = [{"name": b["name"], "brand": b["brand"], "location_id": b["location_id"], "avg": _avg(b["ratings"]), "n": len(b["ratings"])} for b in by.values()]
-    rows.sort(key=lambda x: (-(x["avg"] or 0), -x["n"]))
-    return rows
-
-
-def employee_report(session: Session, days: int = 90, brands: Optional[List[str]] = None,
-                    location_id: Optional[int] = None, as_of_utc: Optional[datetime] = None) -> Dict[str, Any]:
-    """Who customers name in reviews. Powered by review_mentions."""
-    as_of_utc = as_of_utc or datetime.utcnow()
-    since = as_of_utc - timedelta(days=days)
-    q = (select(ReviewMention)
-         .join(Review, ReviewMention.review_id == Review.id)
-         .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
-         .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
-         .where(Review.is_deleted.is_(False), Review.created_at_source >= since)
-         .options(selectinload(ReviewMention.review).selectinload(Review.source_link).selectinload(ReviewSourceLink.location),
-                  selectinload(ReviewMention.employee)))
-    if brands:
-        q = q.where(Location.brand.in_(brands))
-    if location_id:
-        q = q.where(Location.id == location_id)
-    mentions = session.execute(q).scalars().all()
-    by: Dict[str, Dict[str, Any]] = {}
-    total_reviews_with_mentions: Set[int] = set()
-    for m in mentions:
-        r = m.review
-        key = (m.employee.name if m.employee else m.name)
-        site = _site_name(r)
-        b = by.setdefault(key, {"name": key, "on_roster": m.employee is not None, "employee_id": m.employee_id, "sites": Counter(),
-                                "count": 0, "ratings": [], "last": None, "negatives": 0, "examples": []})
-        b["count"] += 1
-        b["sites"][site] += 1
-        if r.rating:
-            b["ratings"].append(r.rating)
-            if r.rating <= settings.negative_rating_max:
-                b["negatives"] += 1
-        if b["last"] is None or r.created_at_source > b["last"]:
-            b["last"] = r.created_at_source
-        if len(b["examples"]) < 3 and r.text:
-            b["examples"].append(r)
-        total_reviews_with_mentions.add(r.id)
-    rows = []
-    for b in by.values():
-        rows.append({"name": b["name"], "on_roster": b["on_roster"], "employee_id": b["employee_id"], "count": b["count"],
-                     "avg": _avg(b["ratings"]), "negatives": b["negatives"], "last": b["last"],
-                     "sites": ", ".join(f"{k} ({v})" if len(b["sites"]) > 1 else k for k, v in b["sites"].most_common(3)),
-                     "primary_site": b["sites"].most_common(1)[0][0] if b["sites"] else "", "examples": b["examples"]})
-    rows.sort(key=lambda x: (-x["count"], x["name"]))
-    # per-site mention rate
-    reviews = _load_reviews(session, since, brands, location_id=location_id, include_unanswered=False)
-    in_window = [r for r in reviews if r.created_at_source >= since]
-    with_text = [r for r in in_window if not r.is_rating_only]
-    site_rate: Dict[str, Dict[str, int]] = {}
-    for r in in_window:
-        sr = site_rate.setdefault(_site_name(r), {"reviews": 0, "with_mentions": 0})
-        sr["reviews"] += 1
-        if r.id in total_reviews_with_mentions:
-            sr["with_mentions"] += 1
-    sites = sorted(({"name": k, **v, "pct": round(100.0 * v["with_mentions"] / v["reviews"]) if v["reviews"] else 0} for k, v in site_rate.items()),
-                   key=lambda x: -x["pct"])
-    return {"rows": rows, "total_mentions": len(mentions), "reviews_with_mentions": len(total_reviews_with_mentions),
-            "reviews_with_text": len(with_text), "pct_of_text_reviews": round(100.0 * len(total_reviews_with_mentions) / len(with_text)) if with_text else 0,
-            "sites": sites}

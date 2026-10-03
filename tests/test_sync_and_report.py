@@ -7,7 +7,8 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, engine, init_db
 from app.models import Base, Location, ReplyTemplate, Review, ReviewSourceLink, User
-from app.reports import build_report, build_trends, render_report_html, render_report_text, site_summary
+from app.daterange import resolve_range
+from app.reports import build_report, build_trends, render_report_html, render_report_text, window_report
 from app.sources.base import NormalizedReview, SourceSummary
 from app.sources.google import GoogleBusinessProfileAdapter, _parse_ts
 from app.sync import sync_link
@@ -116,17 +117,18 @@ def test_response_time_trends_and_templates(db):
     a.owner_reply_updated_at = a.created_at_source + timedelta(hours=6)
     d = s.execute(select(Review).where(Review.external_id == "d")).scalar_one()
     d.owner_reply_updated_at = d.created_at_source + timedelta(hours=30)
-    d.category = "Wait time"; d.rating = 2
+    d.category = "Long Line"; d.rating = 2
     s.commit()
     rep = build_report(s)
     assert rep.median_response_h_30d == 18.0 and rep.response_rate_30d == 67
-    assert rep.negative_themes_30d == [("Wait time", 1)]
-    t = build_trends(s, weeks=4)
-    assert t["brands"] == ["WashU"] and len(t["labels"]) == 4 and sum(t["counts"]["WashU"]) == 3
-    assert t["rating_dist_30d"] == [1, 1, 0, 0, 1]
+    assert set(rep.negative_themes_30d) == {("Long Line", 1), ("Unknown", 1)}
+    t = build_trends(s, resolve_range("last30"))
+    assert t["brands"] == ["WashU"] and len(t["labels"]) == 30 and sum(t["counts"]["WashU"]) == 3
+    assert t["rating_dist"] == [1, 1, 0, 0, 1]
     loc = s.execute(select(Location)).scalar_one()
-    summ = site_summary(s, loc, days=30)
-    assert summ["count"] == 3 and summ["unanswered"] == 1 and summ["themes"] == [("Wait time", 1)]
+    w = window_report(s, resolve_range("last30"), location_ids=[loc.id])
+    assert w.count == 3 and w.unanswered_now == 1 and w.themes == [("Long Line", 1), ("Unknown", 1)]
+    assert w.theme_matrix["WashU Berwyn"]["Long Line"] == 1
     tpl = ReplyTemplate(name="Sorry", min_rating=1, max_rating=3, body="Hi {first_name}, sorry about {site}. – {agent}")
     b = s.execute(select(Review).where(Review.external_id == "b")).scalar_one()
     assert tpl.applies_to(b) and not tpl.applies_to(a)

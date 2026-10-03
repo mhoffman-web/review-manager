@@ -1,7 +1,7 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}
+{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}
 {% block content %}
 <div class="tabs">
-{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?view={{ key }}&brand={{ brand }}&location_id={{ location_id }}&group_id={{ group_id }}&rating={{ rating }}&q={{ q }}&days={{ days }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
+{% set rq = dr.query() if dr else '' %}{% for key, label in views if key not in ['failed','archived'] or counts.get(key) %}<a href="/?view={{ key }}&brand={{ brand }}&location_id={{ location_id }}&group_id={{ group_id }}&rating={{ rating }}&q={{ q }}&{{ rq }}" class="{% if view==key and not active_view %}active{% endif %}">{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
 {% if not counts.get('archived') %}<a href="/?view=archived" class="{% if view=='archived' %}active{% endif %} muted">Archived</a>{% endif %}
 </div>
 {% if saved_views or user %}
@@ -17,17 +17,26 @@
 <form class="filters" method="get" action="/"><input type="hidden" name="view" value="{{ view }}">
   <input type="search" name="q" value="{{ q }}" placeholder="Search review text or name">
   <select name="brand" onchange="this.form.submit()"><option value="">All brands</option>{% for b in brands %}<option value="{{ b }}" {% if b==brand %}selected{% endif %}>{{ b }}</option>{% endfor %}</select>
-  {% if groups %}<select name="group_id" onchange="this.form.submit()"><option value="0">All groups</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id==group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>{% endif %}
+  <select name="group_id" onchange="this.form.submit()"><option value="0">All groups</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id==group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select>
   <select name="location_id" onchange="this.form.submit()"><option value="0">All sites</option>{% for l in locations %}<option value="{{ l.id }}" {% if l.id==location_id %}selected{% endif %}>{{ l.name }}</option>{% endfor %}</select>
   <select name="rating" onchange="this.form.submit()"><option value="">Any rating</option>{% for s in [1,2,3,4,5] %}<option value="{{ s }}" {% if rating==s|string %}selected{% endif %}>{{ s }} star</option>{% endfor %}</select>
-  <select name="days" onchange="this.form.submit()"><option value="0">Any time</option>{% for dd, lbl in [(1,'Yesterday & today'),(7,'Last 7 days'),(30,'Last 30 days'),(90,'Last 90 days')] %}<option value="{{ dd }}" {% if dd==days %}selected{% endif %}>{{ lbl }}</option>{% endfor %}</select>
+  <span class="sep"></span>
+  {{ range_fields(dr, allow_any=True) }}
   <button class="ghost">Apply</button>
-  {% if q or brand or location_id or rating or group_id or days %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
-  <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if sort %} · sorted by {{ sort }}{% elif view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
+  {% if q or brand or location_id or rating or group_id or dr %}<a href="/?view={{ view }}" class="small">Clear</a>{% endif %}
+  <span class="muted small" style="margin-left:auto">{{ total }} review{{ '' if total==1 else 's' }}{% if sort %} · sorted by {{ 'reviewer' if sort=='author' else sort }}{% elif view in ['attention','unanswered'] %} · oldest first{% endif %}</span>
 </form>
+<div style="display:flex;gap:10px;align-items:center;margin:-6px 0 12px;flex-wrap:wrap">
+  <details class="inline-form"><summary class="chip">+ New site group</summary>
+    <form class="popover" method="post" action="/groups"><input type="hidden" name="back" value="/?view={{ view }}">
+      <label class="small muted">Group name</label><input type="text" name="name" placeholder="e.g. Julia's sites" required style="width:100%;margin:4px 0 8px">
+      <div class="site-picks">{% for l in locations %}<label><input type="checkbox" name="location_ids" value="{{ l.id }}"> {{ l.name }}</label>{% endfor %}</div>
+      <button class="primary small">Create group</button></form></details>
+  <span class="muted small">Showing: {{ range_label(dr) }}</span>
+</div>
 <div class="card table-scroll" style="padding:0">
 {% macro sh(key, label) -%}{% set on = (sort == key) %}<th><a class="sort {% if on %}on{% endif %}" href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ key }}&dir={{ 'desc' if (on and dir == 'asc') else 'asc' }}">{{ label }} {% if on %}{{ '↑' if dir == 'asc' else '↓' }}{% else %}<span class="muted">↕</span>{% endif %}</a></th>{%- endmacro %}
-<table class="inbox" data-server-sort><thead><tr>{{ sh('rating','Rating') }}{{ sh('site','Site') }}<th>Review</th>{{ sh('author','Author') }}{{ sh('created','Posted') }}{{ sh('status','Status') }}<th></th></tr></thead><tbody>
+<table class="inbox" data-server-sort><thead><tr>{{ sh('rating','Rating') }}{{ sh('site','Site') }}<th>Review</th>{{ sh('author','Reviewer') }}{{ sh('created','Posted') }}<th>Our reply</th></tr></thead><tbody>
 {% for r in reviews %}
 <tr class="clickable" onclick="if(!event.target.closest('a,button,form'))location.href='/reviews/{{ r.id }}'">
   <td style="white-space:nowrap">{{ source_icon(r) }} {{ stars(r) }}</td>
@@ -35,10 +44,11 @@
   <td><a href="/reviews/{{ r.id }}" style="color:inherit"><div class="snippet">{% if r.is_rating_only %}<span class="muted">Rating only, no written review</span>{% else %}{{ r.text }}{% endif %}</div></a>{{ badges(r) }}</td>
   <td class="ink2">{{ r.author_name or 'Anonymous' }}</td>
   <td class="ink2" title="{{ r.created_at_source|local }}">{{ r.created_at_source|age }}</td>
-  <td>{{ status(r, overdue_cut) }}{% if r.has_owner_reply and r.response_hours is not none %}<div class="muted small">in {{ r.response_hours|hours }}</div>{% endif %}</td>
-  <td style="white-space:nowrap">{% if not r.has_owner_reply and not r.is_archived %}{% if r.assigned_to %}<span class="pill {% if r.assigned_to_id==user.id %}me{% endif %}">{{ r.assigned_to.name.split()[0] }}</span>{% else %}<form method="post" action="/reviews/{{ r.id }}/claim" style="display:inline"><input type="hidden" name="back" value="{{ request.url.path }}?{{ request.url.query }}"><button class="ghost small">Claim</button></form>{% endif %}{% endif %}</td>
+  <td class="reply-cell">{% if r.has_owner_reply %}<div class="snip">{{ r.owner_reply_text }}</div>{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}<div class="by">{% if last and last.created_by %}{{ last.created_by.name.split()[0] }} · {% endif %}{{ r.owner_reply_updated_at|local('%b %-d') }}{% if r.response_hours is not none %} · {{ r.response_hours|hours }} after review{% endif %}</div>
+  {% elif r.is_archived %}<span class="pill">Archived</span>
+  {% else %}<a class="cta {% if r.is_negative or r.created_at_source < overdue_cut %}urgent{% endif %}" href="/reviews/{{ r.id }}">Reply to review</a>{% if r.created_at_source < overdue_cut %}<span class="cta-note">waiting {{ r.created_at_source|age }}</span>{% endif %}{% endif %}</td>
 </tr>
-{% else %}<tr><td colspan="7" class="muted" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='mine' %}You have no claimed reviews.{% elif view=='failed' %}No failed posts.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
+{% else %}<tr><td colspan="6" class="muted" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='failed' %}No failed posts.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
 </tbody></table>
 </div>
 <div class="pager">{% if page>1 %}<a href="/?{{ qs }}&sv={{ active_view.id if active_view else 0 }}&sort={{ sort }}&dir={{ dir }}&page={{ page-1 }}">&larr; Previous</a>{% endif %}

@@ -21,11 +21,12 @@ from .config import settings
 from .db import get_db, session_scope
 from .models import (AiRule, Employee, Location, ReplyTemplate, ReportRecipient, Response as ReplyRow, Review,
                      ReviewMention, ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
+from .daterange import PRESETS, DateRange, resolve_range
 from .reports import (BRAND_COLORS, build_report, build_trends, employee_report, location_rank, monthly_summary,
-                      render_report_html, responder_stats, site_summary)
+                      render_report_html, responder_stats, window_report)
 from .sources import get_adapter
 from .sync import sync_all
-from .text_intel import apply_intel, suggest_templates
+from .text_intel import THEMES as INTEL_THEMES, apply_intel, suggest_templates
 
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
@@ -45,8 +46,7 @@ app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 _tz = ZoneInfo(settings.timezone)
-THEMES = ["Wait time", "Wash quality", "Vacuums", "Damage claim", "Billing / cancellation", "Staff", "Membership value",
-          "Plate recognition", "Hours / closed", "Other"]
+THEMES = INTEL_THEMES
 TEMPLATE_TAGS = ["general", "no_comment", "team", "employee", "amenities", "membership", "mixed", "wait", "quality",
                  "damage", "billing", "staff", "plate", "hours", "vacuums"]
 ATTENTION_WINDOW_DAYS = 90
@@ -87,6 +87,26 @@ templates.env.globals["settings"] = settings
 templates.env.globals["brand_colors"] = BRAND_COLORS
 templates.env.globals["now_utc"] = datetime.utcnow
 templates.env.globals["THEMES"] = THEMES
+templates.env.globals["PRESETS"] = PRESETS
+
+
+def _dr(range: str, start: str, end: str) -> DateRange:
+    return resolve_range(range or "last30", start or "", end or "")
+
+
+def _group_ids(db: Session, group_id: int) -> Optional[List[int]]:
+    if not group_id:
+        return None
+    g = db.get(SiteGroup, group_id)
+    return [l.id for l in g.locations] if g else []
+
+
+def _scope(db: Session, brand: str, group_id: int, location_id: int) -> Optional[List[int]]:
+    """Resolve group / site filters into a location id list (None = no restriction)."""
+    ids = _group_ids(db, group_id)
+    if location_id:
+        ids = [location_id] if (ids is None or location_id in ids) else []
+    return ids
 
 
 @app.exception_handler(HTTPException)
@@ -197,19 +217,20 @@ def health(db: Session = Depends(get_db)):
 
 
 # ----------------------------------------------------------------- inbox
-VIEWS = [("attention", "Needs attention"), ("unanswered", "Unanswered"), ("mine", "Mine"),
-         ("negative", "Negative"), ("recent", "Last 7 days"), ("all", "All"), ("failed", "Failed"), ("archived", "Archived")]
+VIEWS = [("attention", "Needs attention"), ("unanswered", "Unanswered"), ("negative", "Negative"),
+         ("replied", "Replied"), ("all", "All"), ("failed", "Failed"), ("archived", "Archived")]
 VIEW_KEYS = {k for k, _ in VIEWS}
 
 
-def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: int, rating: str, q: str, days: int,
+def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: int, rating: str, q: str, dr: Optional[DateRange],
                  overdue_cut: datetime, group_location_ids: Optional[List[int]] = None):
     base = (select(Review)
             .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
             .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
             .where(Review.is_deleted.is_(False), ReviewSourceLink.active.is_(True))
             .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location),
-                     selectinload(Review.assigned_to), selectinload(Review.mentions)))
+                     selectinload(Review.assigned_to), selectinload(Review.mentions),
+                     selectinload(Review.responses).selectinload(ReplyRow.created_by)))
     order = (Review.created_at_source.desc(),)
     open_ = (Review.has_owner_reply.is_(False)) & (Review.is_archived.is_(False))
     if view == "attention":
@@ -218,12 +239,10 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
     elif view == "unanswered":
         base = base.where(open_)
         order = (Review.created_at_source.asc(),)
-    elif view == "mine":
-        base = base.where(open_, Review.assigned_to_id == user.id)
     elif view == "negative":
         base = base.where(Review.rating <= settings.negative_rating_max)
-    elif view == "recent":
-        base = base.where(Review.created_at_source >= datetime.utcnow() - timedelta(days=7))
+    elif view == "replied":
+        base = base.where(Review.has_owner_reply.is_(True))
     elif view == "failed":
         failed_ids = select(ReplyRow.review_id).where(ReplyRow.status == "failed")
         base = base.where(open_, Review.id.in_(failed_ids))
@@ -237,8 +256,8 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
         base = base.where(Location.id.in_(group_location_ids or [-1]))
     if rating:
         base = base.where(Review.rating == int(rating))
-    if days:
-        base = base.where(Review.created_at_source >= datetime.utcnow() - timedelta(days=days))
+    if dr is not None:
+        base = base.where(Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
     if q:
         like = f"%{q}%"
         base = base.where(or_(Review.text.ilike(like), Review.author_name.ilike(like)))
@@ -248,7 +267,7 @@ def _inbox_query(user: User, view: str, brand: str, location_id: int, group_id: 
 @app.get("/", response_class=HTMLResponse)
 def inbox(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
           view: str = "attention", brand: str = "", location_id: int = 0, group_id: int = 0, rating: str = "", q: str = "",
-          days: int = 0, sv: int = 0, page: int = 1, sort: str = "", dir: str = "asc"):
+          range: str = "", start: str = "", end: str = "", sv: int = 0, page: int = 1, sort: str = "", dir: str = "asc"):
     per_page = 50
     saved_views = db.execute(select(SavedView).where(or_(SavedView.is_shared.is_(True), SavedView.owner_id == user.id))
                              .order_by(SavedView.sort_order, SavedView.name)).scalars().all()
@@ -258,7 +277,10 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
         if active_view:
             p = active_view.params()
             view = p.get("view", view); brand = p.get("brand", ""); location_id = int(p.get("location_id", 0) or 0)
-            group_id = int(p.get("group_id", 0) or 0); rating = str(p.get("rating", "") or ""); q = p.get("q", ""); days = int(p.get("days", 0) or 0)
+            group_id = int(p.get("group_id", 0) or 0); rating = str(p.get("rating", "") or ""); q = p.get("q", "")
+            range = p.get("range", ""); start = p.get("start", ""); end = p.get("end", "")
+            if not range and p.get("days"):
+                range = {1: "yesterday", 7: "last7", 30: "last30", 90: "custom"}.get(int(p["days"]), "")
     if view not in VIEW_KEYS:
         view = "attention"
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
@@ -267,7 +289,8 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     if group_id:
         g = next((g for g in groups if g.id == group_id), None)
         group_loc_ids = [l.id for l in g.locations] if g else []
-    base, order = _inbox_query(user, view, brand, location_id, group_id, rating, q, days, overdue_cut, group_loc_ids)
+    dr = _dr(range, start, end) if (range or start or end) else None
+    base, order = _inbox_query(user, view, brand, location_id, group_id, rating, q, dr, overdue_cut, group_loc_ids)
     dir = "desc" if dir == "desc" else "asc"
     sort_cols = {
         "rating": (Review.rating,), "site": (Location.name,), "author": (Review.author_name,), "created": (Review.created_at_source,),
@@ -286,19 +309,34 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     counts = {
         "attention": db.execute(cbase.where(_attention_cond(overdue_cut))).scalar(),
         "unanswered": db.execute(cbase).scalar(),
-        "mine": db.execute(cbase.where(Review.assigned_to_id == user.id)).scalar(),
         "negative": db.execute(all_base.where(Review.rating <= settings.negative_rating_max)).scalar(),
-        "recent": db.execute(all_base.where(Review.created_at_source >= datetime.utcnow() - timedelta(days=7))).scalar(),
+        "replied": db.execute(all_base.where(Review.has_owner_reply.is_(True))).scalar(),
         "failed": db.execute(cbase.where(Review.id.in_(select(ReplyRow.review_id).where(ReplyRow.status == "failed")))).scalar(),
     }
     locations = db.execute(select(Location).where(Location.active.is_(True)).order_by(Location.brand, Location.name)).scalars().all()
-    current_params = {"view": view, "brand": brand, "location_id": location_id, "group_id": group_id, "rating": rating, "q": q, "days": days}
+    current_params = {"view": view, "brand": brand, "location_id": location_id, "group_id": group_id, "rating": rating, "q": q,
+                      "range": dr.preset if dr else "", "start": dr.start_date.isoformat() if (dr and dr.is_custom) else "",
+                      "end": dr.end_date.isoformat() if (dr and dr.is_custom) else ""}
     qs = "&".join(f"{k}={v}" for k, v in current_params.items())
     return _render(request, "inbox.html", user, db, reviews=rows, total=total, page=page, per_page=per_page,
-                   view=view, views=VIEWS, brand=brand, location_id=location_id, group_id=group_id, groups=groups, rating=rating, q=q, days=days,
+                   view=view, views=VIEWS, brand=brand, location_id=location_id, group_id=group_id, groups=groups, rating=rating, q=q, dr=dr,
                    counts=counts, locations=locations, brands=_brands(db), overdue_cut=overdue_cut,
                    saved_views=saved_views, active_view=active_view, qs=qs, current_params_json=json.dumps(current_params),
                    sort=sort, dir=dir)
+
+
+@app.post("/groups")
+def create_group(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), name: str = Form(...),
+                 location_ids: List[int] = Form([]), back: str = Form("/")):
+    name = name.strip()[:80]
+    if not name or not location_ids:
+        return RedirectResponse(url=back or "/", status_code=303)
+    g = db.execute(select(SiteGroup).where(SiteGroup.name == name)).scalar_one_or_none() or SiteGroup(name=name)
+    db.add(g)
+    g.locations = db.execute(select(Location).where(Location.id.in_(location_ids))).scalars().all()
+    db.commit()
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(url=f"{back}{sep}group_id={g.id}" if back.startswith("/") else f"/?group_id={g.id}", status_code=303)
 
 
 @app.post("/views")
@@ -489,14 +527,18 @@ def draft(review_id: int, user: User = Depends(auth.current_user), db: Session =
 
 # ----------------------------------------------------------------- reports
 @app.get("/reports", response_class=HTMLResponse)
-def reports(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: str = "", weeks: int = 12):
-    weeks = max(4, min(weeks, 52))
+def reports(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), brand: str = "", group_id: int = 0,
+            range: str = "last30", start: str = "", end: str = ""):
+    dr = _dr(range, start, end)
     bl = [brand] if brand else None
-    data = build_report(db, brands=bl)
-    trends = build_trends(db, brands=bl, weeks=weeks)
-    return _render(request, "reports.html", user, db, d=data, trends=trends, trends_json=json.dumps(trends),
-                   brand=brand, brands=_brands(db), weeks=weeks, monthly=monthly_summary(db, bl, months=12),
-                   responders=responder_stats(db, days=30), rank=location_rank(db, days=365, brands=bl))
+    ids = _scope(db, brand, group_id, 0)
+    wr = window_report(db, dr, brands=bl, location_ids=ids)
+    trends = build_trends(db, dr, brands=bl, location_ids=ids)
+    groups = db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all()
+    return _render(request, "reports.html", user, db, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends),
+                   brand=brand, brands=_brands(db), group_id=group_id, groups=groups,
+                   monthly=monthly_summary(db, bl, months=12, location_ids=ids), responders=responder_stats(db, dr),
+                   rank=location_rank(db, dr, brands=bl, location_ids=ids), ai_enabled=settings.ai_enabled)
 
 
 @app.get("/reports/morning", response_class=HTMLResponse)
@@ -507,24 +549,27 @@ def morning_preview(user: User = Depends(auth.current_user), db: Session = Depen
 
 @app.get("/reports/employees", response_class=HTMLResponse)
 def employees_report(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
-                     days: int = 90, brand: str = "", location_id: int = 0):
-    days = max(7, min(days, 365))
-    rep = employee_report(db, days=days, brands=[brand] if brand else None, location_id=location_id or None)
+                     brand: str = "", group_id: int = 0, location_id: int = 0, range: str = "last30", start: str = "", end: str = ""):
+    dr = _dr(range, start, end)
+    ids = _scope(db, brand, group_id, location_id)
+    rep = employee_report(db, dr, brands=[brand] if brand else None, location_ids=ids)
     locations = db.execute(select(Location).where(Location.active.is_(True)).order_by(Location.brand, Location.name)).scalars().all()
-    return _render(request, "reports_employees.html", user, db, rep=rep, days=days, brand=brand, brands=_brands(db),
+    groups = db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all()
+    return _render(request, "reports_employees.html", user, db, rep=rep, dr=dr, brand=brand, brands=_brands(db), group_id=group_id, groups=groups,
                    location_id=location_id, locations=locations)
 
 
 @app.get("/sites/{location_id}", response_class=HTMLResponse)
-def site_page(location_id: int, request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db), days: int = 90):
+def site_page(location_id: int, request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
+              range: str = "last30", start: str = "", end: str = ""):
     loc = db.execute(select(Location).where(Location.id == location_id).options(selectinload(Location.sources))).scalar_one_or_none()
     if not loc:
         raise HTTPException(404, "Site not found")
-    days = max(7, min(days, 365))
-    summary = site_summary(db, loc, days=days)
-    trends = build_trends(db, location_id=loc.id, weeks=max(4, min(52, days // 7)))
-    emp = employee_report(db, days=days, location_id=loc.id)
-    return _render(request, "site.html", user, db, loc=loc, s=summary, days=days, trends=trends, trends_json=json.dumps(trends), emp=emp)
+    dr = _dr(range, start, end)
+    wr = window_report(db, dr, location_ids=[loc.id])
+    trends = build_trends(db, dr, location_ids=[loc.id])
+    emp = employee_report(db, dr, location_ids=[loc.id])
+    return _render(request, "site.html", user, db, loc=loc, w=wr, dr=dr, trends=trends, trends_json=json.dumps(trends), emp=emp)
 
 
 # ----------------------------------------------------------------- locations / sync admin
@@ -772,6 +817,31 @@ def admin_ai(request: Request, user: User = Depends(auth.admin_user), db: Sessio
     stats = db.execute(select(func.count(ReplyRow.id)).where(ReplyRow.ai_generated.is_(True), ReplyRow.status == "posted")).scalar() or 0
     return _render(request, "admin_ai.html", user, db, rules=rules, ai_enabled=settings.ai_enabled, model=settings.ai_model,
                    phones=settings.brand_phones, ai_posted=stats)
+
+
+@app.post("/admin/ai/classify")
+def ai_classify_window(background: BackgroundTasks, user: User = Depends(auth.admin_user), range: str = Form("last30"),
+                       start: str = Form(""), end: str = Form(""), force: int = Form(0), back: str = Form("/reports")):
+    if not settings.ai_enabled:
+        raise HTTPException(400, "AI is not configured")
+    dr = _dr(range, start, end)
+
+    def _run():
+        from .ai import AiUnavailable, classify_negative
+        with session_scope() as s:
+            q = select(Review).where(Review.is_deleted.is_(False), Review.rating <= settings.negative_rating_max,
+                                     Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
+            for r in s.execute(q).scalars().all():
+                if not (r.text or "").strip():
+                    r.category = "No Content"; continue
+                if r.category and not force and r.category != "Unknown":
+                    continue
+                try:
+                    r.category = classify_negative(r, THEMES)
+                except AiUnavailable:
+                    break
+    background.add_task(_run)
+    return RedirectResponse(url=back, status_code=303)
 
 
 @app.post("/admin/ai")

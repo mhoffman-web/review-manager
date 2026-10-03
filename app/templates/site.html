@@ -1,28 +1,28 @@
-{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script %}
+{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_fields, range_label %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
-<div class="page-head"><a href="/reports">&larr; Reports</a><h1><span class="dot {{ loc.brand }}"></span>{{ loc.name }}</h1><span class="muted">{{ loc.city }}, {{ loc.state }}{% if s.listing_url %} · <a href="{{ s.listing_url }}" target="_blank" rel="noopener">Maps listing</a>{% endif %}</span>
-  <form class="right" method="get"><select name="days" onchange="this.form.submit()">{% for dd in [30,90,180,365] %}<option value="{{ dd }}" {% if dd==days %}selected{% endif %}>Last {{ dd }} days</option>{% endfor %}</select>
-  <a class="small" href="/?view=all&location_id={{ loc.id }}">All reviews &rarr;</a></form></div>
+<div class="page-head"><a href="/reports">&larr; Reports</a><h1><span class="dot {{ loc.brand }}"></span>{{ loc.name }}</h1><span class="muted">{{ loc.city }}, {{ loc.state }}{% set link = (loc.sources|selectattr('active')|list|first) %}{% if link and link.listing_url %} · <a href="{{ link.listing_url }}" target="_blank" rel="noopener">Maps listing</a>{% endif %}</span>
+  <form class="right filters" style="margin:0" method="get">{{ range_fields(dr) }}<button class="ghost">Apply</button>
+  <a class="small" href="/?view=all&location_id={{ loc.id }}&{{ dr.query() }}">Reviews &rarr;</a></form></div>
 <div class="tiles">
-  <div class="tile"><div class="v">{{ s.avg or '–' }}</div><div class="l">Avg rating ({{ days }}d)</div><div class="sub">{{ s.count }} reviews</div></div>
-  <div class="tile"><div class="v">{{ s.listing_avg or '–' }}</div><div class="l">Google listing avg</div><div class="sub">{{ s.listing_total or '–' }} all-time</div></div>
-  <div class="tile {% if s.count and s.negative/s.count > 0.2 %}warn{% endif %}"><div class="v">{{ s.negative }}</div><div class="l">Negative</div><div class="sub">{% if s.count %}{{ (100*s.negative/s.count)|round|int }}%{% endif %}</div></div>
-  <div class="tile"><div class="v">{% if s.response_rate is not none %}{{ s.response_rate|int }}%{% else %}–{% endif %}</div><div class="l">Response rate</div></div>
-  <div class="tile"><div class="v">{{ s.median_response_h|hours }}</div><div class="l">Median response</div></div>
-  <div class="tile {% if s.unanswered %}bad{% endif %}"><div class="v">{{ s.unanswered }}</div><div class="l">Unanswered</div></div>
+  <div class="tile"><div class="v">{{ w.avg or '–' }}</div><div class="l">Avg rating</div><div class="sub">{{ w.count }} reviews · {{ range_label(dr) }}</div></div>
+  <div class="tile"><div class="v">{{ w.sites[0].listing_avg if w.sites and w.sites[0].listing_avg else '–' }}</div><div class="l">Google listing avg</div><div class="sub">{{ w.sites[0].listing_total if w.sites else '–' }} all-time</div></div>
+  <div class="tile {% if w.negative_pct and w.negative_pct > 8 %}warn{% endif %}"><div class="v">{{ w.negatives }}</div><div class="l">Negative</div><div class="sub">{{ w.negative_pct or 0 }}%</div></div>
+  <div class="tile"><div class="v">{% if w.response_rate is not none %}{{ w.response_rate|int }}%{% else %}–{% endif %}</div><div class="l">Response rate</div></div>
+  <div class="tile"><div class="v">{{ w.median_response_h|hours }}</div><div class="l">Median response</div></div>
+  <div class="tile {% if w.unanswered_now %}bad{% endif %}"><div class="v">{{ w.unanswered_now }}</div><div class="l">Still unanswered</div></div>
 </div>
 <div class="grid side">
   <div>
-    <div class="card"><h3>Average rating by week</h3><div class="chart-wrap"><canvas id="cRating"></canvas></div></div>
-    <div class="card"><h3>Reviews per week</h3><div class="chart-wrap" style="height:180px"><canvas id="cVolume"></canvas></div></div>
-    <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Recent reviews</h3>
-    <table><tbody>{% for r in s.recent %}<tr class="clickable" onclick="location.href='/reviews/{{ r.id }}'"><td style="white-space:nowrap">{{ stars(r) }}</td><td><div class="snippet">{{ r.text or '(no text)' }}</div><span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|age }} ago{% if r.category %} · {{ r.category }}{% endif %}</span></td><td>{% if r.has_owner_reply %}<span class="pill good">Replied</span>{% else %}<span class="pill warn">Open</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
+    <div class="card"><h3>Average rating by {{ trends.granularity }}</h3><div class="chart-wrap"><canvas id="cRating"></canvas></div></div>
+    <div class="card"><h3>Reviews per {{ trends.granularity }}</h3><div class="chart-wrap" style="height:180px"><canvas id="cVolume"></canvas></div></div>
+    <div class="card table-scroll" style="padding:0"><h3 style="padding:12px 16px 0">Negative reviews in this window</h3>
+    <table><tbody>{% for r in w.negative_reviews[:25] %}<tr class="clickable" onclick="location.href='/reviews/{{ r.id }}'"><td style="white-space:nowrap">{{ stars(r) }}</td><td><div class="snippet">{{ r.text or '(no text)' }}</div><span class="muted small">{{ r.author_name or 'Anonymous' }} · {{ r.created_at_source|local('%b %-d') }}{% if r.category %} · {{ r.category }}{% endif %}</span></td><td>{% if r.has_owner_reply %}<span class="pill good">Replied</span>{% else %}<span class="pill warn">Open</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>
   </div>
   <div>
-    <div class="card"><h3>Rating mix</h3><div class="bars">{% set mx = s.dist|max if s.dist|max else 1 %}{% for i in [4,3,2,1,0] %}<span>{{ i+1 }} star</span><span class="bar"><i style="width:{{ (100*s.dist[i]/mx)|int }}%"></i></span><span class="num">{{ s.dist[i] }}</span>{% endfor %}</div></div>
-    <div class="card"><h3>Negative themes</h3>{% if s.themes %}<div class="bars">{% set mx = s.themes[0][1] %}{% for cat, n in s.themes %}<span>{{ cat }}</span><span class="bar"><i style="width:{{ (100*n/mx)|int }}%"></i></span><span class="num">{{ n }}</span>{% endfor %}</div>{% else %}<p class="muted small">No tagged negative reviews in this window.</p>{% endif %}</div>
-    <div class="card"><h3>Team named in reviews</h3>{% if emp.rows %}<div class="bars">{% set mx = emp.rows[0].count %}{% for e in emp.rows[:8] %}<span class="small">{{ e.name }}</span><span class="bar"><i style="width:{{ (100*e.count/mx)|int }}%"></i></span><span class="num small">{{ e.count }}</span>{% endfor %}</div><p class="muted small" style="margin:8px 0 0">{{ emp.pct_of_text_reviews }}% of written reviews name someone. <a href="/reports/employees?location_id={{ loc.id }}&days={{ days }}">Full report &rarr;</a></p>{% else %}<p class="muted small" style="margin:0">No team members named in this window.</p>{% endif %}</div>
+    <div class="card"><h3>Rating mix</h3><div class="bars">{% set d5 = trends.rating_dist %}{% set mx = d5|max if d5|max else 1 %}{% for i in [4,3,2,1,0] %}<span>{{ i+1 }} star</span><span class="bar"><i style="width:{{ (100*d5[i]/mx)|int }}%"></i></span><span class="num">{{ d5[i] }}</span>{% endfor %}</div></div>
+    <div class="card"><h3>Negative review reasons</h3>{% if w.themes %}<div class="bars">{% set mx = w.themes|map(attribute=1)|max %}{% for cat, n in w.themes %}<span>{{ cat }}</span><span class="bar"><i style="width:{{ (100*n/mx)|int }}%"></i></span><span class="num">{{ n }}</span>{% endfor %}</div>{% else %}<p class="muted small">No negative reviews in this window.</p>{% endif %}</div>
+    <div class="card"><h3>Team named in reviews</h3>{% if emp.rows %}<div class="bars">{% set mx = emp.rows[0].count %}{% for e in emp.rows[:8] %}<span class="small">{{ e.name }}</span><span class="bar"><i style="width:{{ (100*e.count/mx)|int }}%"></i></span><span class="num small">{{ e.count }}</span>{% endfor %}</div><p class="muted small" style="margin:8px 0 0">{{ emp.pct_of_text_reviews }}% of written reviews name someone. <a href="/reports/employees?location_id={{ loc.id }}&{{ dr.query() }}">Full report &rarr;</a></p>{% else %}<p class="muted small" style="margin:0">No team members named in this window.</p>{% endif %}</div>
     <div class="card"><h3>Snowflake ids</h3><p class="small muted" style="margin:0">{{ loc.snowflake_location_ids or 'not mapped yet' }}</p></div>
   </div>
 </div>

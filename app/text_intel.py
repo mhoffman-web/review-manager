@@ -113,13 +113,16 @@ def detect_mentions(text: Optional[str], author_name: Optional[str] = None,
 
 # ----------------------------------------------------------------------------- template suggestion
 KEYWORDS = {
-    "wait": ["wait", "line", "lane", "slow", "minutes", "backed up", "conveyor", "stuck", "forever"],
-    "quality": ["spot", "dirty", "soap", "streak", "missed", "not clean", "still had", "bugs", "dryer", "dry"],
-    "damage": ["scratch", "damage", "broke", "broken", "mirror", "antenna", "chip", "dent", "claim", "cracked", "trim"],
-    "billing": ["charged", "charge", "bill", "billed", "refund", "cancel", "cancelled", "canceled", "price", "membership fee", "card"],
-    "staff": ["rude", "attitude", "ignored", "unprofessional", "phone", "nobody", "no one"],
-    "plate": ["plate", "license", "gate", "reader", "recognize", "recognise", "scan", "tag", "rfid"],
-    "hours": ["closed", "hours", "open", "weather", "shut"],
+    "wait": ["wait", "line", "lane", "slow", "minutes", "backed up", "conveyor", "stuck", "forever", "took 20", "took 30"],
+    "quality": ["spot", "dirty", "soap", "missed", "not clean", "still had", "bugs", "bird", "salt", "film", "rinse"],
+    "dryer": ["dryer", "dry ", "streak", "streaks", "water spots", "still wet", "dripping", "blower"],
+    "damage": ["scratch", "damage", "broke", "broken", "mirror", "antenna", "chip", "dent", "claim", "cracked", "trim", "wiper"],
+    "billing": ["charged", "charge", "bill", "billed", "refund", "cancel", "cancelled", "canceled", "membership fee", "double", "auto renew", "autorenew"],
+    "pricing": ["price", "prices", "expensive", "overpriced", "too much", "cost", "went up", "increase", "raised"],
+    "pos": ["pay station", "kiosk", "card reader", "credit card", "declined", "receipt", "machine", "touch screen", "screen", "terminal"],
+    "staff": ["rude", "attitude", "ignored", "unprofessional", "phone", "nobody", "no one", "manager", "customer service", "unhelpful"],
+    "plate": ["plate", "license", "gate", "reader", "recognize", "recognise", "scan", "tag", "rfid", "wouldn't open", "didn't open", "arm"],
+    "hours": ["closed", "hours", "open", "weather", "shut", "out of order", "down"],
     "vacuums": ["vacuum", "vacuums", "suction", "hose", "mat", "air gun", "towel", "towels"],
     "amenities": ["vacuum", "vacuums", "towel", "towels", "mat cleaner", "air gun", "free", "amenities", "ceramic", "tire shine", "wax"],
     "team": ["staff", "team", "crew", "guys", "employees", "everyone", "workers", "people"],
@@ -127,17 +130,29 @@ KEYWORDS = {
 }
 
 
+# The 13 negative-reason categories used in the weekly reviews workbook. Keep the names exact.
+THEMES = ["Long Line", "Wash Quality", "Dryer", "Vacuum", "Damage", "Billing/Cancellation", "Pricing", "POS",
+          "LPR/Access Issues", "Customer Service", "Closure", "No Content", "Unknown"]
+_KEY_TO_THEME = {"wait": "Long Line", "quality": "Wash Quality", "dryer": "Dryer", "vacuums": "Vacuum", "damage": "Damage",
+                 "billing": "Billing/Cancellation", "pricing": "Pricing", "pos": "POS", "plate": "LPR/Access Issues",
+                 "staff": "Customer Service", "hours": "Closure"}
+# Precedence when several keyword groups hit (specific before generic).
+_THEME_PRIORITY = ["damage", "billing", "plate", "pos", "pricing", "dryer", "wait", "vacuums", "hours", "quality", "staff"]
+
+
 def classify_theme(text: Optional[str]) -> Optional[str]:
-    """Best-effort negative theme label matching the app's theme dropdown."""
-    if not text:
-        return None
+    """Keyword classifier into the workbook categories. Rating-only -> No Content; no hit -> Unknown."""
+    if not text or not text.strip():
+        return "No Content"
     low = text.lower()
-    scores = {k: sum(1 for w in KEYWORDS[k] if w in low) for k in ("wait", "quality", "damage", "billing", "plate", "hours", "vacuums", "staff")}
-    best = max(scores.items(), key=lambda kv: kv[1])
-    if best[1] == 0:
-        return None
-    return {"wait": "Wait time", "quality": "Wash quality", "damage": "Damage claim", "billing": "Billing / cancellation",
-            "plate": "Plate recognition", "hours": "Hours / closed", "vacuums": "Vacuums", "staff": "Staff"}[best[0]]
+    scores = {k: sum(1 for w in KEYWORDS[k] if w in low) for k in _THEME_PRIORITY}
+    best_n = max(scores.values())
+    if best_n == 0:
+        return "Unknown"
+    for k in _THEME_PRIORITY:          # ties resolve by priority order
+        if scores[k] == best_n:
+            return _KEY_TO_THEME[k]
+    return "Unknown"
 
 
 def suggest_templates(review: Review, templates: Sequence[ReplyTemplate], mention_names: Sequence[str] = ()) -> List[Tuple[ReplyTemplate, int]]:
