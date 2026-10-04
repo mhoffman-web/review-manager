@@ -63,14 +63,14 @@ def test_link_shown_when_mail_not_configured(db, monkeypatch):
     monkeypatch.setattr(am.settings, "smtp_user", None)
     c = admin_client(db)
     r = c.post("/admin/users", data={"email": "lily@x.com", "name": "Lily Collins", "password": "", "role": "agent"}, follow_redirects=False)
-    loc = r.headers["location"]
-    assert "link=" in loc and "password%2Freset%3Ftoken" in loc
-    page = c.get(loc)
-    assert "share this set-password link" in page.text and "/password/reset?token=" in page.text
+    # the link is in the page that answers the POST, never in a redirect URL (logs, history)
+    assert r.status_code == 200 and "location" not in r.headers and r.headers["cache-control"] == "no-store"
+    assert "share this set-password link" in r.text and "/password/reset?token=" in r.text
+    assert "/password/reset?token=" not in c.get("/admin/users").text
     # admin can also hand out a reset link for an existing user
     u = db.execute(select(User).where(User.email == "lily@x.com")).scalar_one()
     r2 = c.post(f"/admin/users/{u.id}/reset-link", follow_redirects=False)
-    assert "link=" in r2.headers["location"]
+    assert r2.status_code == 200 and "/password/reset?token=" in r2.text
 
 
 def test_forgot_and_change_password(db, monkeypatch):
@@ -105,6 +105,7 @@ def test_unsafe_deployments_refuse_to_start(monkeypatch, tmp_path):
     monkeypatch.setattr(st, "app_base_url", "https://reviews.example.com")
     monkeypatch.setattr(st, "secret_key", DEFAULT_SECRET_KEY)
     monkeypatch.setattr(st, "demo_mode", False)
+    monkeypatch.setattr(st, "database_url", "sqlite:///./x.db")
     assert any("SECRET_KEY" in p for p in st.fatal_config_problems())
     with pytest.raises(SystemExit):
         st.check_or_exit("the web app")

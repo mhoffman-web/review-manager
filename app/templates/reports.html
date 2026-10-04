@@ -8,7 +8,7 @@
 <div class="tiles">
   <div class="tile"><div class="v">{{ w.count }}</div><div class="l">Reviews</div><div class="sub">{{ w.rating_only_pct|int if w.rating_only_pct is not none else 0 }}% rating only</div></div>
   <div class="tile"><div class="v">{{ w.avg or '–' }}</div><div class="l">Avg rating</div><div class="sub">{{ w.promoter_pct or 0 }}% five-star</div></div>
-  <div class="tile {% if w.negative_pct and w.negative_pct > 8 %}warn{% endif %}"><div class="v">{{ w.negatives }}</div><div class="l">Negative (≤3★)</div><div class="sub">{{ w.negative_pct or 0 }}% of reviews</div></div>
+  <div class="tile {% if w.negative_pct and w.negative_pct > 8 %}warn{% endif %}"><div class="v">{{ w.negatives }}</div><div class="l">Negative (≤{{ settings.negative_rating_max }}★)</div><div class="sub">{{ w.negative_pct or 0 }}% of reviews</div></div>
   <div class="tile"><div class="v">{% if w.response_rate is not none %}{{ w.response_rate|int }}%{% else %}–{% endif %}</div><div class="l">Response rate</div><div class="sub">{{ w.answered }} of {{ w.count }} answered</div></div>
   <div class="tile"><div class="v">{{ w.median_response_h|hours }}</div><div class="l">Median response</div><div class="sub">p90 {{ w.p90_response_h|hours }}</div></div>
   <div class="tile {% if w.overdue_now %}bad{% endif %}"><div class="v">{{ w.unanswered_now }}</div><div class="l">Still unanswered</div><div class="sub">{{ w.overdue_now }} overdue &gt;{{ settings.overdue_hours }}h</div></div>
@@ -32,20 +32,20 @@
   <div class="card table-scroll"><h3>Summary by month</h3>
     <table><thead><tr><th>Month</th><th class="num">Rating</th><th class="num">Reviews</th><th class="num">Positive</th><th class="num">Neutral</th><th class="num">Negative</th><th class="num">Resp. rate</th><th class="num">Median resp.</th></tr></thead><tbody>
     {% for m in monthly %}<tr><td data-sort="{{ m.month }}">{{ m.label }}</td><td class="num">{{ m.avg or '–' }}</td><td class="num">{{ m.n }}</td><td class="num">{{ m.positive }}</td><td class="num">{{ m.neutral }}</td><td class="num" {% if m.n and m.negative/m.n > 0.08 %}style="color:var(--critical)"{% endif %}>{{ m.negative }}</td><td class="num">{% if m.response_rate is not none %}{{ m.response_rate|int }}%{% else %}–{% endif %}</td><td class="num" data-sort="{{ m.median_response_h if m.median_response_h is not none else '' }}">{{ m.median_response_h|hours }}</td></tr>{% endfor %}</tbody></table>
-    <p class="muted small" style="margin:8px 0 0">Positive = 4–5★, neutral = 3★, negative = 1–2★ (Synup convention). The tiles above use ≤3★ as negative.</p></div>
+    <p class="muted small" style="margin:8px 0 0">Positive = 4–5★, neutral = 3★, negative = 1–2★ (Synup convention). Everywhere else, including the tiles above, negative means ≤{{ settings.negative_rating_max }}★ (the NEGATIVE_RATING_MAX setting).</p></div>
   <div>
     <div class="card table-scroll"><h3>Replies by team member</h3>
       <table><thead><tr><th>Who</th><th class="num">Replies</th><th class="num">Median time</th><th class="num">p90</th><th class="num">Negatives</th><th class="num" title="Ratings the reviewer raised after this person's reply">Recovered</th><th class="num">Template</th><th class="num">AI</th></tr></thead><tbody>
       {% for p in responders %}<tr><td>{{ p.name }}</td><td class="num">{{ p.count }}</td><td class="num" data-sort="{{ p.median_h if p.median_h is not none else '' }}">{{ p.median_h|hours }}</td><td class="num" data-sort="{{ p.p90_h if p.p90_h is not none else '' }}">{{ p.p90_h|hours }}</td><td class="num">{{ p.negatives }}</td><td class="num">{{ p.recovered }}</td><td class="num">{{ p.template_pct }}%</td><td class="num">{{ p.ai_pct }}%</td></tr>
       {% else %}<tr><td colspan="8" class="muted">No replies posted through this app yet.</td></tr>{% endfor %}</tbody></table></div>
-    <div class="card table-scroll"><h3>Location rank</h3>
+    <div class="card table-scroll"><h3>Site rank</h3>
       <div class="bars">{% for s in rank %}<span class="small"><span class="dot {{ s.brand }}"></span>{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</span><span class="bar"><i style="width:{{ (100*((s.avg or 0)-3)/2)|int if (s.avg or 0) > 3 else 2 }}%"></i></span><span class="num small">{{ s.avg or '–' }} <span class="muted">({{ s.n }})</span>{% if s.listing_avg %} <span class="muted" title="What Google shows for the listing, all time">· Google {{ s.listing_avg }}</span>{% endif %}</span>{% endfor %}</div>
-      <p class="muted small" style="margin:8px 0 0">Window average (count) · what Google shows for the listing all-time.</p></div>
+      <p class="muted small" style="margin:8px 0 0">Window average (count) · what Google shows for the listing all-time. The bar runs from 3.0★ (empty) to 5.0★ (full), so differences between good sites are visible.</p></div>
   </div>
 </div>
 
 <div class="card table-scroll"><h3>Negative review reasons</h3>
-  <p class="muted small" style="margin:-4px 0 10px">{{ w.negatives }} negative reviews in {{ range_label(dr) }}, grouped into the workbook categories{% if ai_enabled %} by AI{% else %} by keyword rules (set ANTHROPIC_API_KEY for AI grouping){% endif %}.
+  <p class="muted small" style="margin:-4px 0 10px">{{ w.negatives }} negative reviews in {{ range_label(dr) }}, grouped into the workbook categories{% if ai_enabled %} by AI{% else %} by keyword rules{% if user.is_admin %} (add ANTHROPIC_API_KEY to the server settings for AI grouping){% endif %}{% endif %}.
   {% if user.is_admin and ai_enabled %}<form method="post" action="/admin/ai/classify" style="display:inline"><input type="hidden" name="range" value="{{ dr.preset }}"><input type="hidden" name="start" value="{{ dr.start_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="end" value="{{ dr.end_date.isoformat() if dr.is_custom else '' }}"><input type="hidden" name="back" value="/reports?{{ fq }}"><button class="ghost small">Re-group this window with AI</button></form>{% endif %}</p>
   {% set cats = w.themes|map(attribute=0)|list %}
   <table><thead><tr><th>Site</th>{% for c in cats %}<th class="num">{{ c }}</th>{% endfor %}<th class="num">Total</th></tr></thead><tbody>

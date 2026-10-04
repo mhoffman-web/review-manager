@@ -1,10 +1,9 @@
 {% extends "base.html" %}{% block title %}{{ active_view.name if active_view else (dict(views)[view] if view in dict(views) else 'Inbox') }}{% if total %} ({{ total }}){% endif %} · Inbox{% endblock %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import ms %}
 {% block content %}
-<div class="tabs" role="tablist">
-{% for key, label in views if key not in ['failed','archived','removed'] or counts.get(key) %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}" {% if key=='removed' %}title="Reviews that stopped appearing on Google: the reviewer deleted them or Google took them down"{% endif %}>{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
-{% if not counts.get('archived') %}<a href="/?view=archived" class="{% if view=='archived' %}active{% endif %} muted">Archived</a>{% endif %}
-<span class="hint muted small" title="Negative (≤{{ settings.negative_rating_max }}★) and unanswered, or unanswered for more than {{ settings.overdue_hours }} hours within the last 90 days. Oldest first, negatives on top.">ⓘ What counts as needing attention?</span>
-</div>
+<nav class="tabs" aria-label="Inbox views">
+{% for key, label in views if key not in ['failed','archived','removed'] or counts.get(key) or view == key %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}" {% if view==key and not active_view %}aria-current="page"{% endif %} {% if key=='removed' %}title="Reviews that stopped appearing on Google: the reviewer deleted them or Google took them down"{% endif %}>{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
+<details class="hint small"><summary class="muted">What counts as needing attention?</summary><p>Negative (≤{{ settings.negative_rating_max }}★) and unanswered, or unanswered for more than {{ settings.overdue_hours }} hours within the last 90 days. Oldest first, negatives on top.</p></details>
+</nav>
 {% if saved_views or user %}
 <div class="tabs saved">
   <span class="muted small" style="align-self:center;margin-right:4px">Saved views</span>
@@ -34,6 +33,13 @@
       <div class="site-picks">{% for l in locations %}<label><input type="checkbox" name="location_ids" value="{{ l.id }}"> {{ l.name }}</label>{% endfor %}</div>
       <button class="primary small">Create group</button></form></details>
   <span class="muted small">Showing: {{ range_label(dr) }}</span>
+  {# Phones hide the table header, so sorting gets its own control there. #}
+  {% set sv_id = active_view.id if active_view else 0 %}
+  <label class="mobile-only small"><span class="muted">Sort</span>
+    <select aria-label="Sort the list" onchange="location.href=this.value">
+      {% for key, d, label in [('', 'asc', 'Default order'), ('created', 'desc', 'Newest first'), ('created', 'asc', 'Oldest first'), ('rating', 'asc', 'Lowest rating first'), ('rating', 'desc', 'Highest rating first'), ('site', 'asc', 'Site A–Z')] %}
+      <option value="/?{{ qs }}&sv={{ sv_id }}&sort={{ key }}&dir={{ d }}" {% if sort == key and (dir == d or not key) %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
   <span class="right small"><span class="muted">Export this list:</span> <a href="/export/reviews.csv?{{ qs }}">CSV</a> · <a href="/export/reviews.xlsx?{{ qs }}">Excel</a></span>
 </div>
 <div class="card table-scroll" style="padding:0">
@@ -60,7 +66,7 @@
     <textarea name="text" rows="3" maxlength="4096" placeholder="Hi {{ r.first_name }}, thanks for ..." aria-label="Reply text"></textarea>
     <div class="warn-box" hidden></div>
     <div class="composer-foot"><button type="button" class="primary small" data-post>Post reply</button><button type="button" class="ghost small" data-post-next>Post &amp; next</button><button type="button" class="ghost small" data-cancel>Cancel</button>
-      <span class="right"><span class="cc">0</span> / 4096 · ⌘↵ posts · <span class="st muted"></span></span></div>
+      <span class="right"><span class="cc">0</span> / 4096 · <span class="kbd-post">Ctrl+Enter</span> posts · <span class="st muted"></span></span></div>
   </div></td></tr>{% endif %}
 {% else %}<tr><td colspan="6" class="muted empty" style="padding:28px;text-align:center">{% if view=='attention' %}Nothing needs attention. Every negative review has a reply and nothing is overdue.{% elif view=='failed' %}No failed posts.{% elif view=='removed' %}No reviews have disappeared from Google.{% else %}No reviews match.{% endif %}</td></tr>{% endfor %}
 </tbody></table>

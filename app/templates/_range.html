@@ -1,6 +1,6 @@
 {# Date-range control shared by inbox, reports, sites and team. Emits fields only; place inside a GET form. #}
 {% macro range_fields(dr, allow_any=False) -%}
-<select name="range" class="range-preset" onchange="if(this.value!=='custom'){this.form.querySelectorAll('input[type=date]').forEach(function(i){i.value='';});this.form.submit();}">
+<select name="range" class="range-preset" onchange="if(this.value!=='custom'){this.form.querySelectorAll('input[type=date]').forEach(function(i){i.value='';});this.form.requestSubmit();}">
   {% if allow_any %}<option value="" {% if not dr %}selected{% endif %}>Any time</option>{% endif %}
   {% for key, label in PRESETS %}<option value="{{ key }}" {% if dr and dr.preset==key %}selected{% endif %}>{{ label }}</option>{% endfor %}
 </select>

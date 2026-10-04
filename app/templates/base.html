@@ -37,7 +37,13 @@
       <dt>E</dt><dd>Archive the selected review (with Undo)</dd><dt>1–9</dt><dd>Insert the matching template</dd><dt>Alt + 1–9</dt><dd>Insert a template while typing in the reply box (Option on a Mac)</dd><dt>N / P</dt><dd>Next / previous in queue (review page)</dd>
       <dt>/</dt><dd>Search</dd><dt>Ctrl + Enter</dt><dd>Post the reply (⌘ + Enter on a Mac)</dd><dt>Esc</dt><dd>Close the composer or this panel</dd><dt>?</dt><dd>Show or hide this panel</dd></dl>
     <button type="button" class="ghost small" data-keys-help>Close</button></div></div>
+<script>/* Show the Mac shortcut on Macs, Ctrl elsewhere */(function(){if(/Mac|iPhone|iPad/.test(navigator.platform||navigator.userAgent)){document.querySelectorAll('.kbd-post').forEach(function(e){e.textContent='⌘↵';});}})();</script>
 <script src="/static/sort.js"></script>
+<script>/* Print: charts redraw at the paper width, and back after. Multiselect menus stay on screen. */(function(){
+function resizeCharts(){ if (window.Chart && Chart.instances) Object.values(Chart.instances).forEach(function(c){ c.resize(); }); }
+window.addEventListener('beforeprint', resizeCharts); window.addEventListener('afterprint', resizeCharts);
+document.querySelectorAll('details[data-ms]').forEach(function(d){ d.addEventListener('toggle', function(){ var m = d.querySelector('.ms-menu'); if (!m || !d.open) return; m.classList.remove('flip'); if (m.getBoundingClientRect().right > document.documentElement.clientWidth - 8) m.classList.add('flip'); }); });
+})();</script>
 <script>(function(){document.querySelectorAll('details[data-ms]').forEach(function(d){var initial=null;d.addEventListener('toggle',function(){if(d.open){initial=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');}else{var now=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');if(initial!==null&&now!==initial){d.closest('form').requestSubmit();}}});
 d.querySelector('.ms-all').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=true;});});d.querySelector('.ms-none').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=false;});});});
 document.addEventListener('click',function(e){document.querySelectorAll('details[data-ms][open]').forEach(function(d){if(!d.contains(e.target))d.open=false;});});})();</script>

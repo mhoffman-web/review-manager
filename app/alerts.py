@@ -42,7 +42,7 @@ class AlertBatch:
 
 
 def alert_recipients(session: Session) -> List[str]:
-    rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True))).scalars().all()
+    rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True)).order_by(ReportRecipient.email)).scalars().all()
     return [r.email for r in rows if ALERTS_KEY in r.editions]
 
 

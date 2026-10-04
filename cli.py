@@ -99,12 +99,12 @@ def cmd_google_auth(_a):
 
 def cmd_discover_locations(_a):
     """List every GBP account + location the token can see and upsert review_sources rows."""
-    from app.discovery import discover_google
+    from app.discovery import discover_google, excluded
     with session_scope() as s:
         totals = discover_google(s)
         links = s.execute(select(ReviewSourceLink).where(ReviewSourceLink.source == "google").order_by(ReviewSourceLink.display_name)).scalars().all()
         for link in links:
-            state = "EXCLUDED (left alone)" if not link.active and link.location_id is None and any(p.lower() in (link.display_name or "").lower() for p in settings.listing_exclude_patterns) \
+            state = "EXCLUDED (left alone)" if not link.active and link.location_id is None and excluded(link.display_name or "") \
                 else (link.location.name if link.location else "UNMAPPED (inactive)")
             print(f"  {link.external_location_id:<22} {(link.display_name or ''):<40} {(link.address or ''):<45} -> {state}")
     print(f"\n{totals['listings']} listings across {totals['accounts']} account(s); {totals['mapped']} mapped. Map the rest on Admin -> Sites & listings.")

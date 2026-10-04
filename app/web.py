@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 from collections import Counter
 from datetime import datetime, timedelta
@@ -27,7 +28,7 @@ from .config import ALERTS_KEY, EDITIONS, RECIPIENT_LISTS, settings
 from .events import record
 from .db import get_db, session_scope
 from .models import (AiRule, ApiKey, Employee, Location, ReplyTemplate, ReportRecipient, Response as ReplyRow, Review,
-                     ReviewEvent, ReviewMention, ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
+                     ReviewMention, ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
 from .daterange import PRESETS, DateRange, resolve_range
 from .reports import (BRAND_COLORS, build_digest, build_trends, disputed_count, employee_report, listing_summaries, location_rank,
                       monthly_summary, rating_distribution, recovery_stats, render_digest_html, responder_stats, window_report)
@@ -47,7 +48,8 @@ from contextlib import asynccontextmanager
 async def _lifespan(_app: FastAPI):
     from .db import init_db
     settings.check_or_exit("the web app")
-    init_db()          # create tables / add new columns before serving
+    if os.getenv("RM_SCHEMA_READY") != "1":   # start.sh already ran init-db for this deploy
+        init_db()      # create tables / add new columns before serving
     if settings.sso_config_problem:
         log.warning("microsoft sign-in disabled: %s", settings.sso_config_problem)
     yield
@@ -115,39 +117,7 @@ def _dr(range: str, start: str, end: str) -> DateRange:
     return resolve_range(range or "last30", start or "", end or "")
 
 
-def _ints(values) -> List[int]:
-    out: List[int] = []
-    for v in values or []:
-        for part in str(v).split(","):
-            part = part.strip()
-            if part and part != "0":
-                try:
-                    out.append(int(part))
-                except ValueError:
-                    pass
-    return out
-
-
-def _strs(values) -> List[str]:
-    out: List[str] = []
-    for v in values or []:
-        for part in str(v).split(","):
-            if part.strip():
-                out.append(part.strip())
-    return out
-
-
-def _scope(db: Session, group_ids: List[int], location_ids: List[int]) -> Optional[List[int]]:
-    """Resolve group + site multi-selects into one location id list (None = no restriction)."""
-    ids: Optional[List[int]] = None
-    if group_ids:
-        ids = []
-        for g in db.execute(select(SiteGroup).where(SiteGroup.id.in_(group_ids)).options(selectinload(SiteGroup.locations))).scalars().all():
-            ids.extend(l.id for l in g.locations)
-        ids = sorted(set(ids))
-    if location_ids:
-        ids = sorted(set(location_ids) if ids is None else set(ids) & set(location_ids))
-    return ids
+from .filters import ints as _ints, scope as _scope, strs as _strs  # noqa: E402
 
 
 def _filter_ctx(db: Session) -> dict:
@@ -563,6 +533,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
         "negative": db.execute(all_base.where(Review.rating <= settings.negative_rating_max)).scalar(),
         "replied": db.execute(all_base.where(Review.has_owner_reply.is_(True))).scalar(),
         "failed": db.execute(cbase.where(Review.id.in_(select(ReplyRow.review_id).where(ReplyRow.status == "failed")))).scalar(),
+        "archived": db.execute(all_base.where(Review.is_archived.is_(True))).scalar(),
         "removed": db.execute(select(func.count()).select_from(Review).join(ReviewSourceLink)
                               .where(Review.is_deleted.is_(True), ReviewSourceLink.active.is_(True))).scalar(),
     }
@@ -819,7 +790,9 @@ def post_reply(review_id: int, request: Request, text: str = Form(...), go_next:
     if warnings:
         if wants_json:
             return JSONResponse({"ok": False, "warnings": warnings}, status_code=422)
-        return _review_page(request, user, db, r, ctx, warnings=warnings, draft=text)
+        # Post/Redirect/Get: the page re-checks the draft (kept in the browser) and shows the
+        # warnings, so a refresh never offers to resubmit the form.
+        return RedirectResponse(url=f"/reviews/{review_id}?" + urlencode({"check": 1, "ctx": ctx}), status_code=303)
     nxt = _neighbors(db, r, user, ctx)["next"] if go_next else None    # before the state changes
     editing = r.has_owner_reply
     row = ReplyRow(review_id=r.id, text=text, created_by_id=user.id, status="draft",
@@ -890,17 +863,6 @@ def save_note(review_id: int, note: str = Form(""), category: str = Form(""), us
         r.internal_note = new_note
     db.commit()
     return RedirectResponse(url=f"/reviews/{review_id}?msg=Saved", status_code=303)
-
-
-@app.post("/reviews/{review_id}/claim")
-def claim(review_id: int, user: User = Depends(auth.current_user), db: Session = Depends(get_db), back: str = Form("")):
-    r = _get_review(db, review_id)
-    if r.assigned_to_id == user.id:
-        r.assigned_to_id, r.assigned_at = None, None
-    else:
-        r.assigned_to_id, r.assigned_at = user.id, datetime.utcnow()
-    db.commit()
-    return RedirectResponse(url=_safe_path(back, f"/reviews/{review_id}"), status_code=303)
 
 
 @app.post("/reviews/{review_id}/archive")
@@ -979,7 +941,7 @@ def draft(review_id: int, user: User = Depends(auth.current_user), db: Session =
         return JSONResponse({"ok": True, "text": text})
     except AiUnavailable as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
-    except Exception as exc:  # pragma: no cover
+    except Exception:  # pragma: no cover
         log.exception("draft failed")
         return JSONResponse({"ok": False, "error": "Drafting failed"}, status_code=500)
 
@@ -1231,9 +1193,8 @@ def link_location(link_id: int, location_id: int = Form(...), user: User = Depen
     if not link:
         raise HTTPException(404)
     link.location_id = location_id or None
-    title = (link.display_name or "").lower()
-    excluded = any(pat.lower() in title for pat in settings.listing_exclude_patterns)
-    link.active = bool(link.location_id) and not excluded
+    from .discovery import excluded
+    link.active = bool(link.location_id) and not excluded(link.display_name or "")
     db.commit()
     return RedirectResponse(url="/locations", status_code=303)
 
@@ -1290,14 +1251,23 @@ def delete_template(tid: int, user: User = Depends(auth.admin_user), db: Session
 
 # ----------------------------------------------------------------- admin: users / recipients / groups / employees / ai
 @app.get("/admin/users", response_class=HTMLResponse)
-def admin_users(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), msg: str = "", link: str = ""):
+def admin_users(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), msg: str = ""):
+    return _admin_users_page(request, user, db, msg)
+
+
+def _admin_users_page(request: Request, user: User, db: Session, msg: str = "", link: str = "") -> HTMLResponse:
+    """A set-password link is shown in this response only (never in a URL, where it would sit in
+    access logs and browser history while it is still valid)."""
     users = db.execute(select(User).order_by(User.name)).scalars().all()
-    return _render(request, "admin_users.html", user, db, users=users, msg=msg, link=link if link.startswith(settings.app_base_url) else "",
+    resp = _render(request, "admin_users.html", user, db, users=users, msg=msg, link=link,
                    sso_enabled=settings.sso_enabled, domains=settings.sso_allowed_domains, mail_enabled=settings.mail_enabled)
+    if link:
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.post("/admin/users")
-def save_user(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
+def save_user(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
               name: str = Form(""), password: str = Form(""), role: str = Form("agent")):
     """Create or update a user. A new user gets a welcome email with a set-password link; when
     email is not configured the link is shown to the admin to pass on."""
@@ -1318,10 +1288,8 @@ def save_user(user: User = Depends(auth.admin_user), db: Session = Depends(get_d
         db.commit()
         link = auth.password_link(u, "welcome")
         if send_welcome(u, link, by=user.name):
-            q = {"msg": f"Welcome email sent to {u.email} with a link to set their password."}
-        else:
-            q = {"msg": f"{u.name} added.", "link": link}
-        return RedirectResponse(url=f"/admin/users?{urlencode(q)}", status_code=303)
+            return RedirectResponse(url=f"/admin/users?{urlencode({'msg': f'Welcome email sent to {u.email} with a link to set their password.'})}", status_code=303)
+        return _admin_users_page(request, user, db, f"{u.name} added.", link)
     u.name, u.role = name.strip(), role
     if password:
         problem = auth.password_problem(password)
@@ -1333,7 +1301,7 @@ def save_user(user: User = Depends(auth.admin_user), db: Session = Depends(get_d
 
 
 @app.post("/admin/users/{uid}/reset-link")
-def admin_reset_link(uid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+def admin_reset_link(uid: int, request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
     """Email (or show) a set-password link for a user who is locked out or new."""
     from .account_mail import send_reset
     u = db.get(User, uid)
@@ -1341,10 +1309,8 @@ def admin_reset_link(uid: int, user: User = Depends(auth.admin_user), db: Sessio
         return RedirectResponse(url="/admin/users?msg=User+not+found", status_code=303)
     link = auth.password_link(u, "welcome" if not u.password_hash else "reset")
     if send_reset(u, link):
-        q = {"msg": f"Reset link emailed to {u.email}."}
-    else:
-        q = {"msg": f"Reset link for {u.email}:", "link": link}
-    return RedirectResponse(url=f"/admin/users?{urlencode(q)}", status_code=303)
+        return RedirectResponse(url=f"/admin/users?{urlencode({'msg': f'Reset link emailed to {u.email}.'})}", status_code=303)
+    return _admin_users_page(request, user, db, f"Reset link for {u.email}:", link)
 
 
 @app.post("/admin/users/{uid}/toggle")
@@ -1614,11 +1580,12 @@ def save_site(user: User = Depends(auth.admin_user), db: Session = Depends(get_d
 
 @app.post("/admin/sites/{sid}/toggle")
 def toggle_site(sid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+    from . import discovery
     loc = db.get(Location, sid)
     if loc:
         loc.active = not loc.active
         for l in loc.sources:
-            l.active = loc.active and not any(pat.lower() in (l.display_name or "").lower() for pat in settings.listing_exclude_patterns)
+            l.active = loc.active and not discovery.excluded(l.display_name or "")
         db.commit()
     return RedirectResponse(url="/admin/sites", status_code=303)
 

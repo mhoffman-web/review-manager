@@ -1,7 +1,7 @@
 {# Multi-select dropdown: a <details> with checkboxes. Submits its form when closed after a change. #}
 {% macro ms(name, label, options, selected, value_attr='id', label_attr='name', dot=False) -%}
 {% set sel = selected|map('string')|list %}
-<details class="ms" data-ms><summary><span class="ms-label">{% if sel|length == 0 %}{{ label }}{% elif sel|length == 1 %}{% for o in options %}{% if (o[value_attr] if value_attr else o)|string in sel %}{{ (o[label_attr] if label_attr else o) }}{% endif %}{% endfor %}{% else %}{{ label }} · {{ sel|length }}{% endif %}</span><span class="ms-caret">▾</span></summary>
+<details class="ms" data-ms><summary><span class="ms-label">{% if sel|length == 0 %}{{ label }}{% elif sel|length == 1 %}{% set ns_ms = namespace(name='') %}{% for o in options %}{% if (o[value_attr] if value_attr else o)|string in sel %}{% set ns_ms.name = (o[label_attr] if label_attr else o) %}{% endif %}{% endfor %}{{ ns_ms.name or (label ~ ' · 1') }}{% else %}{{ label }} · {{ sel|length }}{% endif %}</span><span class="ms-caret">▾</span></summary>
 <div class="ms-menu">
   <div class="ms-tools"><button type="button" class="ms-all">All</button><button type="button" class="ms-none">None</button></div>
   {% for o in options %}{% set v = (o[value_attr] if value_attr else o)|string %}<label><input type="checkbox" name="{{ name }}" value="{{ v }}" {% if v in sel %}checked{% endif %}>{% if dot %}<span class="dot {{ o.brand }}"></span>{% endif %}{{ (o[label_attr] if label_attr else o) }}</label>{% endfor %}

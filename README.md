@@ -125,13 +125,15 @@ review_manager/
 ```bash
 cd review_manager
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # app + test tools (servers install requirements.txt only)
 cp .env.example .env            # then edit SECRET_KEY at minimum
 python cli.py init-db
 python cli.py seed-locations
 python cli.py create-user --email lily@washucarwash.com --name "Lily"   # or skip: SSO creates agents on first sign-in
 python cli.py create-user --email mhoffman@washucarwash.com --name "Mitchel" --admin
 pytest -q                       # should pass with no network
+# Same suite on a throwaway Postgres (it drops every table first):
+# TEST_DATABASE_URL=postgresql://... TEST_POSTGRES_URL=postgresql://... pytest -q
 python cli.py web --reload      # http://localhost:8000
 ```
 

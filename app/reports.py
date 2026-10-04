@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import EDITIONS, settings
 from .daterange import DateRange, resolve_range
-from .models import Employee, Location, ReportRecipient, ReportSend, Response, Review, ReviewEvent, ReviewMention, ReviewSourceLink, User
+from .models import Location, ReportRecipient, ReportSend, Response, Review, ReviewEvent, ReviewMention, ReviewSourceLink
 from .text_intel import THEMES
 
 log = logging.getLogger(__name__)
@@ -753,33 +753,9 @@ def rating_distribution(session: Session, dr: DateRange, brands: Optional[List[s
             "pct": [round(100.0 * c / n, 1) if n else 0 for c in totals],
             "chart": {"labels": [r["name"] for r in out], "series": [[r["counts"][i] for r in out] for i in range(5)]}}
 
-# ----------------------------------------------------------------------------- email (legacy renderers kept for tests)
-def render_report_html(data: ReportData) -> str:
-    tpl = _env.get_template("report_email_legacy.html")
-    tz = ZoneInfo(settings.timezone)
-    return tpl.render(d=data, settings=settings, tz=tz, to_local=lambda dt: dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz))
-
-
-def render_report_text(data: ReportData) -> str:
-    lines = [
-        f"Review report for {data.as_of_local:%A %b %d, %Y}",
-        f"New reviews (24h): {data.new_24h}  avg {data.avg_24h or '-'}",
-        f"Unanswered: {data.unanswered_total}  overdue (> {settings.overdue_hours}h): {data.overdue_total}",
-        f"30d: {data.count_30d} reviews, avg {data.totals_30d or '-'}, response rate {data.response_rate_30d or '-'}%, median response {data.median_response_h_30d or '-'}h",
-        "",
-        "Negative reviews (24h):",
-    ]
-    for r in data.negative_24h:
-        lines.append(f"  {r.rating}* {_site_name(r)} - {(r.text or '')[:140]}")
-    lines += ["", "Site                          new24h  avg7d  avg30d  unanswered"]
-    for s in data.sites:
-        lines.append(f"  {s.name:<28} {s.new_24h:>5}  {s.avg_7d or '-':>5}  {s.avg_30d or '-':>6}  {s.unanswered:>5}")
-    return "\n".join(lines)
-
-
 def recipient_groups(session: Session) -> Dict[str, List[str]]:
     """Active recipients by digest edition (il / tn / all)."""
-    rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True))).scalars().all()
+    rows = session.execute(select(ReportRecipient).where(ReportRecipient.active.is_(True)).order_by(ReportRecipient.email)).scalars().all()
     groups: Dict[str, List[str]] = {}
     for r in rows:
         eds = [e for e in r.editions if e in EDITIONS] or ["all"]

@@ -2,6 +2,8 @@
 # Render start command. Seeds placeholder data once when DEMO_MODE=true and the
 # database has no reviews, then serves the app on Render's $PORT.
 set -euo pipefail
+# init-db first: it refuses an unsafe configuration (default SECRET_KEY, demo mode on real data)
+# BEFORE anything is seeded, and it creates/migrates the schema once for this deploy.
 python cli.py init-db
 if [ "${DEMO_MODE:-false}" = "true" ]; then
   if ! python -c 'import sys; sys.path.insert(0, "."); from sqlalchemy import select, func; from app.db import SessionLocal; from app.models import Review
@@ -13,4 +15,4 @@ sys.exit(0 if n else 1)'; then
 fi
 # --proxy-headers lets the app see https from Render's proxy. The login throttle does not rely
 # on uvicorn's client address; it reads X-Forwarded-For itself, trusting TRUSTED_PROXY_HOPS.
-exec uvicorn app.web:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips="*"
+RM_SCHEMA_READY=1 exec uvicorn app.web:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips="*"

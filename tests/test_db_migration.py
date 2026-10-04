@@ -49,6 +49,9 @@ def test_every_model_column_migrates_on_sqlite_and_compiles_for_postgres():
             assert ddl.startswith(f"ALTER TABLE {table.name} ADD COLUMN {col.name} ")
             assert " 1 NOT NULL" not in ddl and " 0 NOT NULL" not in ddl or not isinstance(col.type, Boolean)
     # SQLite round trip for a boolean-with-default and a string-with-default column
+    # (the Postgres equivalent is test_against_real_postgres in test_coverage_gaps.py)
+    if engine.dialect.name != "sqlite":
+        return
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE reviews DROP COLUMN author_is_anonymous"))
         conn.execute(text("ALTER TABLE users DROP COLUMN auth_provider"))

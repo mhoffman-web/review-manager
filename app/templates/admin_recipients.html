@@ -13,8 +13,8 @@
     <a class="chip" href="{% if key == ALERTS_KEY %}/reports/alerts/preview{% else %}/reports/morning?edition={{ key }}{% endif %}" target="_blank">Preview</a></div>
   <ul class="recip-list">
   {% for r in by_edition[key] %}<li><div class="who"><span>{{ r.email }}</span>{% if r.name %}<span class="muted small">{{ r.name }}</span>{% endif %}</div>
-    <form method="post" action="/admin/recipients/{{ r.id }}/delete"><input type="hidden" name="edition" value="{{ key }}"><button class="ghost small" title="Remove from the {{ ed.short }} edition">Remove</button></form></li>
-  {% else %}<li class="muted small empty">Nobody gets the {{ ed.short }} edition yet.</li>{% endfor %}
+    <form method="post" action="/admin/recipients/{{ r.id }}/delete"><input type="hidden" name="edition" value="{{ key }}"><button class="ghost small" title="Remove from the {{ ed.short }} list">Remove</button></form></li>
+  {% else %}<li class="muted small empty">Nobody is on the {{ ed.short }} list yet.</li>{% endfor %}
   </ul>
   <form method="post" action="/admin/recipients" class="recip-add"><input type="hidden" name="edition" value="{{ key }}">
     <textarea name="emails" rows="3" placeholder="jane@washucarwash.com&#10;Sam Lee <sam@iconcarwash.com>" required></textarea>

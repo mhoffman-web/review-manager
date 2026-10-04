@@ -22,7 +22,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sqlalchemy import select  # noqa: E402
-from sqlalchemy.orm import selectinload  # noqa: E402
 
 from app.ai import DEFAULT_RULES  # noqa: E402
 from app.auth import hash_password  # noqa: E402

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.db import SessionLocal, engine, init_db
 from app.models import Base, Location, ReplyTemplate, Review, ReviewSourceLink, User
 from app.daterange import resolve_range
-from app.reports import build_digest, build_report, build_trends, digest_subject, render_digest_html, render_digest_text, render_report_html, render_report_text, window_report
+from app.reports import build_digest, build_report, build_trends, digest_subject, render_digest_html, render_digest_text, window_report
 from app.sources.base import NormalizedReview, SourceSummary
 from app.sources.google import GoogleBusinessProfileAdapter, _parse_ts
 from app.sync import sync_link
@@ -106,9 +106,6 @@ def test_report_counts(db):
     assert d.unanswered_total == 2 and d.overdue_total == 1  # d is >48h old and unanswered
     site = d.sites[0]
     assert site.name == "WashU Berwyn" and site.count_30d == 3 and site.response_rate_30d == 33
-    html = render_report_html(d)
-    assert "awful" in html and "WashU Berwyn" in html
-    assert "Negative reviews" in render_report_text(d)
     # yesterday digest editions: IL sees the WashU site, TN sees nothing, Corporate sees everything
     yday = mk_yesterday(s, link)
     il = build_digest(s, "il")
@@ -196,11 +193,6 @@ def test_web_pages_render(db):
         assert r.status_code == 200, (path, r.status_code)
     assert "awful" in c.get("/?view=all&q=awful").text
     assert c.get("/admin/users").status_code == 403   # agent, not admin
-    rid = s.execute(select(Review.id).where(Review.external_id == "b")).scalar()
-    r = c.post(f"/reviews/{rid}/claim", data={"back": "/"}, follow_redirects=False)
-    assert r.status_code == 303
-    s.expire_all()
-    assert s.get(Review, rid).assigned_to_id == u.id
 
 
 def test_rating_change_removal_and_alerts(db):
@@ -338,7 +330,7 @@ def test_sync_all_survives_a_poisoned_session(db, monkeypatch):
     assert (totals["links"], totals["ok"], totals["error"]) == (2, 1, 1)
     s.expire_all()
     l1 = s.get(ReviewSourceLink, link.id); l2 = s.get(ReviewSourceLink, link2.id)
-    assert l1.last_sync_status == "error" and l1.fail_count == 1 and "FOREIGN KEY" in l1.last_error
+    assert l1.last_sync_status == "error" and l1.fail_count == 1 and "foreign key" in l1.last_error.lower()
     assert l2.last_sync_status == "ok" and l2.fail_count == 0
     assert s.execute(select(Review).where(Review.source_link_id == link2.id)).scalars().all().__len__() == 2
     runs = s.execute(select(SyncRun).where(SyncRun.source_link_id == link.id)).scalars().all()

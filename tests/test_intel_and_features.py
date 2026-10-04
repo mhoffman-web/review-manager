@@ -318,8 +318,8 @@ def test_redirect_targets_and_script_json_are_safe(db):
     c = TestClient(app)
     r = c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026", "next": "//evil.com"}, follow_redirects=False)
     assert r.headers["location"] == "/"
-    r = c.post(f"/reviews/{rid}/claim", data={"back": "//evil.com/x"}, follow_redirects=False)
-    assert r.headers["location"] == f"/reviews/{rid}"
+    r = c.post("/groups", data={"name": "Ev", "location_ids": str(loc.id), "back": "//evil.com/x"}, follow_redirects=False)
+    assert r.headers["location"].startswith("/?group_id=")
     r = c.post(f"/reviews/{rid}/archive", data={"back": "https://evil.com"}, follow_redirects=False)
     assert r.headers["location"].startswith(f"/reviews/{rid}?") and "undo_archive=" in r.headers["location"]
     assert "undo=%2F" not in r.headers["location"]

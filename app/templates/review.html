@@ -27,19 +27,20 @@
   {% if not r.is_deleted %}
   <div class="card" id="reply">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><h2 style="margin:0">{% if r.has_owner_reply %}Our reply{% else %}Reply{% endif %}</h2>
-      {% if ai_enabled %}<button type="button" class="ghost small" id="draftBtn" title="Draft with Claude using the house rules">✦ Draft with AI</button><span id="draftStatus" class="muted small"></span>{% else %}<span class="muted small" title="Set ANTHROPIC_API_KEY to enable">AI drafting off</span>{% endif %}</div>
+      {% if ai_enabled %}<button type="button" class="ghost small" id="draftBtn" title="Draft with Claude using the house rules">✦ Draft with AI</button><span id="draftStatus" class="muted small"></span>{% else %}{% if user.is_admin %}<span class="muted small" title="Add ANTHROPIC_API_KEY to the server settings to turn it on">AI drafting off</span>{% endif %}{% endif %}</div>
     {% if r.has_owner_reply %}<div class="quote">{{ r.owner_reply_text }}</div>
     <p class="muted small">{% set last = r.responses|selectattr('status','equalto','posted')|list|last %}{% if last %}Replied by {{ last.created_by.name if last.created_by else 'us' }} · {% endif %}First posted {{ r.replied_at|local }}{% if r.response_hours is not none %} ({{ r.response_hours|hours }} after the review){% endif %}{% if r.owner_reply_updated_at and r.first_replied_at and r.owner_reply_updated_at > r.first_replied_at %} · edited {{ r.owner_reply_updated_at|local }}{% endif %}. Edit below and post again to replace it on Google; the response time stays as it was.</p>{% endif %}
     {% if warnings %}<div class="warn-box" id="warnBox"><strong>Before this goes public:</strong><ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul><span class="muted small">Fix it in the box below, or post it as written.</span></div>{% endif %}
     {% if tpls %}<div class="chips" style="margin:6px 0 10px">{% for t in tpls %}{% if t.suggested or loop.index <= 6 %}<button type="button" class="chip {% if t.suggested %}suggested{% endif %}" data-tpl="{{ t.id }}" title="{{ t.band }} · used {{ t.usage }}× · press {{ loop.index }}">{% if t.suggested %}★ {% endif %}{{ loop.index }} · {{ t.name }}</button>{% endif %}{% endfor %}
       {% if tpls|length > 6 %}<details style="display:inline"><summary class="chip">more…</summary><span class="chips" style="margin-top:6px">{% for t in tpls %}{% if not (t.suggested or loop.index <= 6) %}<button type="button" class="chip" data-tpl="{{ t.id }}" title="{{ t.band }} · used {{ t.usage }}×">{{ t.name }}</button>{% endif %}{% endfor %}</span></details>{% endif %}</div>{% endif %}
+    <div id="warnSlot"></div>
     <form method="post" action="/reviews/{{ r.id }}/reply" id="replyForm">
       <input type="hidden" name="template_id" id="templateId" value="0"><input type="hidden" name="ai_generated" id="aiFlag" value="0"><input type="hidden" name="ctx" value="{{ ctx }}"><input type="hidden" name="force" id="forceFlag" value="0">
       <textarea name="text" id="replyText" required placeholder="Hi {{ r.first_name }}, thanks for ..." maxlength="4096" aria-label="Reply text">{{ draft if draft is not none else (r.owner_reply_text or '') }}</textarea>
       <div class="composer-foot">
-        <button class="primary" name="go_next" value="0">{% if warnings %}Post as written{% elif r.has_owner_reply %}Update reply{% else %}Post reply{% endif %}</button>
+        <button class="primary" id="postBtn" name="go_next" value="0">{% if warnings %}Post as written{% elif r.has_owner_reply %}Update reply{% else %}Post reply{% endif %}</button>
         {% if not r.has_owner_reply and nav_links.next %}<button class="ghost" name="go_next" value="1">Post &amp; next</button>{% endif %}
-        <span class="right"><span id="charCount">0</span> / 4096 · ⌘↵ posts</span>
+        <span class="right"><span id="charCount">0</span> / 4096 · <span class="kbd-post">Ctrl+Enter</span> posts</span>
       </div>
     </form>
     {% if r.has_owner_reply %}<form method="post" action="/reviews/{{ r.id }}/reply/delete" style="margin-top:10px" onsubmit="return confirm('Remove our reply from Google?')"><button class="danger small">Remove reply</button></form>{% endif %}
@@ -96,7 +97,30 @@
     var tplId = document.getElementById('templateId'), aiFlag = document.getElementById('aiFlag'), force = document.getElementById('forceFlag');
     var key = 'rm-draft-{{ r.id }}', saved = null;
     try { saved = sessionStorage.getItem(key); } catch (e) {}
-    if (saved && !ta.value) { ta.value = saved; }
+    var qp = new URLSearchParams(location.search), checking = qp.get('check') === '1';
+    var pendingKey = key + '-pending', pending = null;
+    try { pending = sessionStorage.getItem(pendingKey); sessionStorage.removeItem(pendingKey); } catch (e) {}
+    if (checking && saved) { ta.value = saved; }            // came back from a post that needs a second look
+    else if (pending && {{ 'true' if r.has_owner_reply else 'false' }} && !/fail|error|could not/i.test(qp.get('msg') || '')) {
+      try { sessionStorage.removeItem(key); } catch (e) {} saved = null;   // the reply went up: forget the draft
+    }
+    else if (saved && !ta.value) { ta.value = saved; }
+    if (checking) {
+      qp.delete('check'); history.replaceState(null, '', location.pathname + (qp.toString() ? '?' + qp.toString() : '') + location.hash);
+      if (ta.value.trim()) {
+        var fd = new FormData(); fd.append('text', ta.value);
+        fetch('/reviews/{{ r.id }}/reply/check', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
+          if (!j.warnings || !j.warnings.length) return;
+          var box = document.createElement('div'); box.className = 'warn-box'; box.id = 'warnBox'; box.setAttribute('role', 'alert');
+          var h = document.createElement('strong'); h.textContent = 'Before this goes public:'; box.appendChild(h);
+          var ul = document.createElement('ul'); j.warnings.forEach(function (w) { var li = document.createElement('li'); li.textContent = w; ul.appendChild(li); }); box.appendChild(ul);
+          var n = document.createElement('span'); n.className = 'muted small'; n.textContent = 'Fix it in the box below, or post it as written.'; box.appendChild(n);
+          document.getElementById('warnSlot').appendChild(box);
+          force.value = 1; var pb = document.getElementById('postBtn'); if (pb) pb.textContent = 'Post as written';
+          ta.focus();
+        }).catch(function () {});
+      }
+    }
     function count(){ cc.textContent = ta.value.length; }
     function persist(){ try { if (ta.value.trim()) sessionStorage.setItem(key, ta.value); else sessionStorage.removeItem(key); } catch (e) {} }
     ta.addEventListener('input', function(){ count(); persist(); tplId.value = 0; aiFlag.value = 0; force.value = 0; }); count();
@@ -107,7 +131,8 @@
       f.dataset.submitting = '1';
       // Disable after the browser has read the clicked button's value (Post vs Post & next).
       setTimeout(function(){ f.querySelectorAll('button').forEach(function(b){ b.disabled = true; }); }, 0);
-      try { sessionStorage.removeItem(key); } catch (err) {}
+      // Keep the draft until the next page confirms the reply is up (warnings bring it back).
+      try { sessionStorage.setItem(key, ta.value); sessionStorage.setItem(pendingKey, '1'); } catch (err) {}
     });
     document.querySelectorAll('.chip[data-tpl]').forEach(function(b){
       b.addEventListener('click', function(){

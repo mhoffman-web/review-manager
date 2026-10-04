@@ -3,7 +3,7 @@ Pure Python, no model calls, so it runs on every sync."""
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from .models import ReplyTemplate, Review
 

@@ -48,10 +48,16 @@
       if (th.hasAttribute("data-nosort") || !th.textContent.trim()) return;
       th.classList.add("sortable");
       th.setAttribute("title", "Click to sort");
+      th.setAttribute("tabindex", "0");
+      th.setAttribute("role", "columnheader");
+      th.setAttribute("aria-sort", "none");
+      th.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); th.click(); }
+      });
       th.addEventListener("click", function (e) {
         if (e.target.closest("a,button,input,select")) return;
         var state = th.getAttribute("aria-sort");           // none -> ascending -> descending -> none
-        heads.forEach(function (o) { o.removeAttribute("aria-sort"); });
+        heads.forEach(function (o) { if (o.classList.contains("sortable")) o.setAttribute("aria-sort", "none"); });
         if (state === "descending") {
           original.forEach(function (r) { tbody.appendChild(r); r.classList.remove("sort-hidden"); });
           return;

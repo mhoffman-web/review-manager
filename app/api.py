@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 from .config import settings
 from .daterange import PRESET_KEYS, resolve_range
 from .db import get_db
-from .models import ApiKey, Location, Review, ReviewSourceLink, SiteGroup
+from .models import ApiKey, Location, Review, ReviewSourceLink
 from .reports import employee_report, listing_summaries, rating_distribution, recovery_stats, window_report
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
@@ -57,25 +57,7 @@ def api_key(request: Request, db: Session = Depends(get_db)) -> ApiKey:
     return k
 
 
-def _ints(values) -> List[int]:
-    out = []
-    for v in values or []:
-        for part in str(v).split(","):
-            if part.strip().isdigit():
-                out.append(int(part))
-    return out
-
-
-def _scope(db: Session, group_ids: List[int], location_ids: List[int]) -> Optional[List[int]]:
-    ids: Optional[List[int]] = None
-    if group_ids:
-        ids = []
-        for g in db.execute(select(SiteGroup).where(SiteGroup.id.in_(group_ids)).options(selectinload(SiteGroup.locations))).scalars().all():
-            ids.extend(l.id for l in g.locations)
-        ids = sorted(set(ids))
-    if location_ids:
-        ids = sorted(set(location_ids) if ids is None else set(ids) & set(location_ids))
-    return ids
+from .filters import ints as _ints, scope as _scope  # noqa: E402
 
 
 def _range(range: str, start: str, end: str):

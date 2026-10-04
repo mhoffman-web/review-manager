@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint, func, Index,
+    Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
