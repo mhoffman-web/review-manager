@@ -68,7 +68,7 @@ services:
         sync: false
       - key: GOOGLE_TOKEN_JSON       # contents of google_token.json after `python cli.py google-auth`
         sync: false
-      - key: SMTP_USER               # reviews@washucarwash.com
+      - key: SMTP_USER               # reviews@washassociates.com
         sync: false
       - key: SMTP_PASSWORD
         sync: false
