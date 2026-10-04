@@ -248,3 +248,15 @@ def test_init_db_never_prints_the_database_password(monkeypatch, capsys):
     cli.main()
     out = capsys.readouterr().out
     assert "s3cret-pw" not in out and "db.example" in out
+
+
+def test_seed_content_is_complete_and_idempotent(env):
+    from app.models import AiRule, ReplyTemplate, SavedView, SiteGroup
+    from app.starter_content import TEMPLATES, seed_content
+    s, *_ = env
+    first = seed_content(s); s.commit()
+    assert first["templates"] == len(TEMPLATES) == 21 and first["ai_rules"] == 5 and first["views"] == 3
+    assert {g.name for g in s.query(SiteGroup)} >= {"IL – WashU"}             # groups only where the sites exist
+    again = seed_content(s); s.commit()
+    assert sum(again.values()) == 0
+    assert s.query(ReplyTemplate).count() == 21 and s.query(AiRule).count() == 5 and s.query(SavedView).count() == 3

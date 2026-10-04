@@ -217,12 +217,20 @@ def cmd_restore(a):
     print("restored: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
 
 
+def cmd_seed_content(a):
+    from app.starter_content import seed_content
+    with session_scope() as s:
+        out = seed_content(s, a.owner or "")
+    print("added: " + ", ".join(f"{v} {k}" for k, v in out.items()) + " (existing items are left alone)")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db").set_defaults(fn=cmd_init_db)
     sp = sub.add_parser("backup", help="write the whole database to a gzipped JSON file"); sp.add_argument("--out"); sp.set_defaults(fn=cmd_backup)
     sp = sub.add_parser("restore", help="load a backup into an EMPTY database"); sp.add_argument("file"); sp.add_argument("--yes", action="store_true"); sp.set_defaults(fn=cmd_restore)
+    sp = sub.add_parser("seed-content", help="starter templates, AI rules, site groups, shared views"); sp.add_argument("--owner", help="email of the admin who owns the shared views"); sp.set_defaults(fn=cmd_seed_content)
     sp = sub.add_parser("seed-locations"); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_seed_locations)
     sp = sub.add_parser("create-user"); sp.add_argument("--email", required=True); sp.add_argument("--name", required=True)
     sp.add_argument("--admin", action="store_true"); sp.add_argument("--password", help="omit to be prompted"); sp.add_argument("--invite", action="store_true", help="no password: email (or print) a set-password link instead"); sp.set_defaults(fn=cmd_create_user)
