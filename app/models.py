@@ -394,13 +394,17 @@ class ReplyTemplate(Base):
         return self.min_rating <= review.rating <= self.max_rating
 
     def render(self, review: "Review", agent_name: str = "", employee: str = "") -> str:
+        from .config import settings
         loc = review.location
+        brand = loc.brand if loc else ""
         names = review.mention_names if review.mentions is not None else []
         emp = employee or (" and ".join(names[:2]) if names else "our team")
         return (self.body
                 .replace("{first_name}", review.first_name)
                 .replace("{site}", loc.name if loc else "our location")
-                .replace("{brand}", loc.brand if loc else "")
+                .replace("{brand}", brand)
+                .replace("{email}", settings.brand_emails.get(brand) or settings.brand_emails.get("WashU", ""))
+                .replace("{phone}", settings.brand_phones.get(brand, ""))
                 .replace("{employee}", emp)
                 .replace("{agent}", agent_name))
 

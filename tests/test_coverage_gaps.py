@@ -260,3 +260,22 @@ def test_seed_content_is_complete_and_idempotent(env):
     again = seed_content(s); s.commit()
     assert sum(again.values()) == 0
     assert s.query(ReplyTemplate).count() == 21 and s.query(AiRule).count() == 5 and s.query(SavedView).count() == 3
+
+
+def test_templates_use_the_brands_contact_email(env):
+    from app.models import ReplyTemplate
+    from app.starter_content import TEMPLATES, seed_content
+    s, c, (il, tn), (l_il, l_tn), _ = env
+    tpl = ReplyTemplate(name="t", body="Write to {email} or call {phone}.", min_rating=1, max_rating=3)
+    r_tn = review(s, l_tn, "e1", 1, "bad"); r_il = review(s, l_il, "e2", 1, "bad")
+    assert "info@iconcarwash.com" in tpl.render(r_tn) and "info@washucarwash.com" in tpl.render(r_il)
+    assert not any("support@" in body for *_x, body, _o in [(t[0], t[5], t[6]) for t in TEMPLATES])
+    # a starter template still holding the old single address is updated; an edited one is not
+    seed_content(s); s.commit()
+    billing = s.query(ReplyTemplate).filter_by(name="Sorry – Billing").one()
+    damage = s.query(ReplyTemplate).filter_by(name="Sorry – Damage claim").one()
+    billing.body = billing.body.replace("{email}", "support@washucarwash.com")
+    damage.body = "Our own wording, support@washucarwash.com"
+    s.commit()
+    out = seed_content(s); s.commit()
+    assert out["templates_updated"] == 1 and "{email}" in billing.body and damage.body == "Our own wording, support@washucarwash.com"

@@ -113,6 +113,9 @@ class Settings:
     # Phone number the AI may include in replies to negative reviews, per brand.
     brand_phones: Dict[str, str] = field(default_factory=lambda: dict(
         kv.split("=", 1) for kv in _csv(_env("BRAND_PHONES", "WashU=(815) 205-3492;ICON=(615) 776-7837;WA=(615) 776-7837").replace(";", ",")) if "=" in kv))
+    # Contact email per brand: fills {email} in templates and is offered to the AI for negative reviews.
+    brand_emails: Dict[str, str] = field(default_factory=lambda: dict(
+        kv.split("=", 1) for kv in _csv(_env("BRAND_EMAILS", "WashU=info@washucarwash.com;ICON=info@iconcarwash.com;WA=info@washassociates.com").replace(";", ",")) if "=" in kv))
 
     # Group negative reviews into the workbook categories with Claude as they arrive (needs the key).
     ai_classify: bool = _bool(os.getenv("AI_CLASSIFY"), True)

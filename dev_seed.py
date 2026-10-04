@@ -105,7 +105,7 @@ REPLY_POS = ["Hi {name}, thank you for the kind words and the 5 stars! We're loo
 REPLY_EMP = ["Hi {name}, thank you so much for the great review! We're thrilled to hear {emp} made your visit such a great experience.",
              "Hi {name}, thanks for the great review! We're happy to hear {emp} gave you such great service.",
              "Hi {name}, thank you for the wonderful feedback! We're glad {emp} was helpful. See you next time!"]
-REPLY_NEG = ["{name}, we're sorry about that. That's not the experience we want at {site}. Please reach out to us at support@washucarwash.com so we can make it right.",
+REPLY_NEG = ["{name}, we're sorry about that. That's not the experience we want at {site}. Please reach out to us at {email} so we can make it right.",
              "Thanks for letting us know, {name}. We've shared this with the {site} manager and would like to follow up with you directly.",
              "We apologize, {name}. Please send us your plate or membership details so we can look into this right away."]
 
@@ -269,7 +269,7 @@ def main():
                     reply_at = created + timedelta(hours=delay_h) if replied else None
                     if replied:
                         if is_neg:
-                            reply_text = random.choice(REPLY_NEG).format(name=first, site=loc.name)
+                            reply_text = random.choice(REPLY_NEG).format(name=first, site=loc.name, email=settings.brand_emails.get(loc.brand, ""))
                         elif emp_names:
                             reply_text = random.choice(REPLY_EMP).format(name=first, emp=" and ".join(e.split()[0] if e != "Gregory Banks" else "Gregory" for e in emp_names))
                         else:

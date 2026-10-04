@@ -31,6 +31,7 @@ def build_prompt(review: Review, rules: Sequence[str], examples: Sequence[ReplyT
     brand = loc.brand if loc else ""
     site = loc.name if loc else "our location"
     phone = settings.brand_phones.get(brand, "")
+    email = settings.brand_emails.get(brand, "")
     mentions = ", ".join(review.mention_names) if review.mentions else ""
     system = (
         f"You write owner replies to Google reviews for {brand or 'a'} car wash locations. "
@@ -45,6 +46,7 @@ def build_prompt(review: Review, rules: Sequence[str], examples: Sequence[ReplyT
     text = (review.text or "").strip() or "(The customer left a rating with no written review.)"
     user = (
         f"Location: {site}\nBrand: {brand}\nBusiness phone for this brand: {phone or 'n/a'}\n"
+        f"Business email for this brand: {email or 'n/a'}\n"
         f"Reviewer first name: {review.first_name}\nRating: {rating}\n"
         f"Employees named in the review: {mentions or 'none'}\n\nReview:\n{text}\n\nWrite the reply."
     )
