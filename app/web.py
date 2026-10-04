@@ -551,6 +551,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     else:
         sort = ""
     total = db.execute(select(func.count()).select_from(base.order_by(None).subquery())).scalar() or 0
+    page = min(page, max(1, -(-total // per_page)))     # coming back to a page that has since emptied
     rows = db.execute(base.order_by(*order).offset((page - 1) * per_page).limit(per_page)).scalars().all()
 
     cbase = _open_base()
@@ -575,7 +576,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     qs = urlencode(qs_parts)
     filtered = bool(q or brands_f or loc_f or grp_f or rat_f or dr)
     # Queue context: the review page uses it for prev/next within exactly this list.
-    ctx = qs + "&" + urlencode({"sort": sort, "dir": dir, "sv": active_view.id if active_view else 0})
+    ctx = qs + "&" + urlencode({"sort": sort, "dir": dir, "sv": active_view.id if active_view else 0, "page": page})
     # Inline composer: top template suggestions per open review on this page.
     tpl_rows = db.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True)).order_by(ReplyTemplate.sort_order, ReplyTemplate.name)).scalars().all()
     first = user.first_name
@@ -666,8 +667,10 @@ def _get_review(db: Session, review_id: int) -> Review:
     return r
 
 
-def _queue_ids(db: Session, user: User, ctx: str) -> List[int]:
-    """Review ids in the exact order of the inbox list the person came from."""
+def _queue_ids(db: Session, user: User, ctx: str, view_override: Optional[str] = None) -> List[int]:
+    """Review ids in the exact order of the inbox list the person came from. With
+    `view_override="all"` the same filters and the same ORDER, but every review, so a review
+    that has just left the queue (replied, archived) can still be placed in it."""
     p = parse_qs(ctx, keep_blank_values=True)
     g = lambda k, d="": (p.get(k) or [d])[0]
     view = g("view", "attention")
@@ -675,8 +678,10 @@ def _queue_ids(db: Session, user: User, ctx: str) -> List[int]:
         view = "attention"
     dr = _dr(g("range"), g("start"), g("end")) if (g("range") or g("start") or g("end")) else None
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
-    base, order = _inbox_query(user, view, _strs(p.get("brand")), _scope(db, _ints(p.get("group_id")), _ints(p.get("location_id"))),
-                               _ints(p.get("rating")), g("q"), dr, overdue_cut)
+    args = (_strs(p.get("brand")), _scope(db, _ints(p.get("group_id")), _ints(p.get("location_id"))), _ints(p.get("rating")), g("q"), dr, overdue_cut)
+    base, order = _inbox_query(user, view, *args)
+    if view_override:
+        base, _ = _inbox_query(user, view_override, *args)
     sort, direction = g("sort"), g("dir", "asc")
     sort_cols = {"rating": (Review.rating,), "site": (Location.name,), "author": (Review.author_name,), "created": (Review.created_at_source,)}
     if sort in sort_cols:
@@ -693,6 +698,15 @@ def _neighbors(db: Session, r: Review, user: Optional[User] = None, ctx: str = "
             i = ids.index(r.id)
             return {"prev": ids[i - 1] if i > 0 else None, "next": ids[i + 1] if i + 1 < len(ids) else None,
                     "pos": i + 1, "total": len(ids), "ctx": ctx}
+        # This review has left the queue (just replied or archived). Place it where it sat, using
+        # the same order over every review, so Next continues from here instead of jumping to the top.
+        everything = _queue_ids(db, user, ctx, view_override="all")
+        in_queue = set(ids)
+        if r.id in everything:
+            i = everything.index(r.id)
+            nxt = next((x for x in everything[i + 1:] if x in in_queue), None)
+            prv = next((x for x in reversed(everything[:i]) if x in in_queue), None)
+            return {"prev": prv, "next": nxt, "pos": None, "total": len(ids), "ctx": ctx}
         return {"prev": None, "next": ids[0] if ids else None, "pos": None, "total": len(ids), "ctx": ctx}
     open_ = (Review.is_deleted.is_(False)) & (ReviewSourceLink.active.is_(True)) & (Review.has_owner_reply.is_(False)) & (Review.is_archived.is_(False))
     nxt = db.execute(select(Review.id).join(ReviewSourceLink).where(open_, Review.created_at_source > r.created_at_source)
@@ -932,9 +946,11 @@ def report_review(review_id: int, user: User = Depends(auth.current_user), db: S
 
 
 @app.post("/reviews/{review_id}/mentions")
-def add_mention(review_id: int, name: str = Form(...), user: User = Depends(auth.current_user), db: Session = Depends(get_db)):
+def add_mention(review_id: int, name: str = Form(""), user: User = Depends(auth.current_user), db: Session = Depends(get_db)):
     r = _get_review(db, review_id)
     name = name.strip()[:80]
+    if not name:
+        return RedirectResponse(url=f"/reviews/{review_id}?" + urlencode({"msg": "Type a name to tag."}), status_code=303)
     if name and name not in r.mention_names:
         emp = db.execute(select(Employee).where(func.lower(Employee.name) == name.lower())).scalar_one_or_none()
         db.add(ReviewMention(review_id=r.id, name=emp.name if emp else name, employee_id=emp.id if emp else None, source="manual"))

@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
+{% extends "base.html" %}{% block title %}Reports · {{ dr.label }}{% endblock %}{% from "_stars.html" import stars, site %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Reports</h1><span class="muted small">{{ range_label(dr) }}</span>
@@ -60,7 +60,7 @@
   {% set ns = namespace(brand=None) %}
   {% for s in w.sites %}
   {% if s.brand != ns.brand %}{% set ns.brand = s.brand %}<tr class="brand-row"><td colspan="8"><span class="dot {{ s.brand }}"></span>{{ s.brand }}</td></tr>{% endif %}
-  <tr class="clickable" onclick="location.href='/sites/{{ s.location_id }}?{{ dr.query() }}'">
+  <tr {% if s.location_id %}class="clickable" onclick="location.href='/sites/{{ s.location_id }}?{{ dr.query() }}'"{% endif %}>
     <td data-sort="{{ s.name }}">{% if s.location_id %}<a class="site-link" href="/sites/{{ s.location_id }}?{{ dr.query() }}">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %}</td>
     <td class="num">{{ s.count_30d }}</td>
     <td class="num" {% if s.avg_30d and s.avg_30d < 4 %}style="color:var(--critical)"{% endif %}>{{ s.avg_30d or '–' }}</td><td class="num">{{ s.negative_30d }}</td>

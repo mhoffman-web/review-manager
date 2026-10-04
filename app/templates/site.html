@@ -1,12 +1,12 @@
-{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}
+{% extends "base.html" %}{% block title %}{{ loc.name }} · {{ dr.label }}{% endblock %}{% from "_stars.html" import stars %}{% from "_charts.html" import chart_head, chart_script, unit_picker %}{% from "_range.html" import range_fields, range_label %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
-<div class="page-head"><a href="/reports">&larr; Reports</a><h1><span class="dot {{ loc.brand }}"></span>{{ loc.name }}</h1><span class="muted">{{ loc.city }}, {{ loc.state }}{% set link = (loc.sources|selectattr('active')|list|first) %}{% if link and link.listing_url %} · <a href="{{ link.listing_url }}" target="_blank" rel="noopener">Maps listing</a>{% endif %}</span>
+<div class="page-head"><a href="/reports">&larr; Reports</a><h1><span class="dot {{ loc.brand }}"></span>{{ loc.name }}</h1><span class="muted">{{ [loc.city, loc.state]|select|join(', ') }}{% set link = (loc.sources|selectattr('active')|list|first) %}{% if link and link.listing_url %} · <a href="{{ link.listing_url }}" target="_blank" rel="noopener">Maps listing</a>{% endif %}</span>
   <form class="right filters" style="margin:0" method="get">{{ range_fields(dr) }}<button class="ghost">Apply</button>
   <a class="small" href="/?view=all&location_id={{ loc.id }}&{{ dr.query() }}">Reviews &rarr;</a></form></div>
 <div class="tiles">
   <div class="tile"><div class="v">{{ w.avg or '–' }}</div><div class="l">Avg rating</div><div class="sub">{{ w.count }} reviews · {{ range_label(dr) }}</div></div>
-  <div class="tile"><div class="v">{{ w.sites[0].listing_avg if w.sites and w.sites[0].listing_avg else '–' }}</div><div class="l">Google listing avg</div><div class="sub">{{ w.sites[0].listing_total if w.sites else '–' }} all-time</div></div>
+  <div class="tile"><div class="v">{{ w.sites[0].listing_avg if w.sites and w.sites[0].listing_avg else '–' }}</div><div class="l">Google listing avg</div><div class="sub">{% if w.sites and w.sites[0].listing_total %}{{ w.sites[0].listing_total }} all-time{% else %}No Google count yet{% endif %}</div></div>
   <div class="tile {% if w.negative_pct and w.negative_pct > 8 %}warn{% endif %}"><div class="v">{{ w.negatives }}</div><div class="l">Negative</div><div class="sub">{{ w.negative_pct or 0 }}%</div></div>
   <div class="tile"><div class="v">{% if w.response_rate is not none %}{{ w.response_rate|int }}%{% else %}–{% endif %}</div><div class="l">Response rate</div></div>
   <div class="tile"><div class="v">{{ w.median_response_h|hours }}</div><div class="l">Median response</div></div>

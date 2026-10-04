@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_label %}{% from "_filters.html" import report_filters %}
+{% extends "base.html" %}{% block title %}Rating distribution · {{ dr.label }}{% endblock %}{% from "_charts.html" import chart_head, chart_script %}{% from "_range.html" import range_label %}{% from "_filters.html" import report_filters %}
 {% block head %}{{ chart_head() }}{% endblock %}
 {% block content %}
 <div class="page-head"><a href="/reports?{{ fq }}">&larr; Reports</a><h1>Rating distribution by site</h1><span class="muted small">{{ range_label(dr) }}</span>
@@ -16,7 +16,7 @@
 <table><thead><tr><th>Site</th><th class="num">1★</th><th class="num">2★</th><th class="num">3★</th><th class="num">4★</th><th class="num">5★</th><th class="num">Total</th><th class="num">Avg</th><th class="num">≤3★ share</th><th class="num" title="The listing's all-time average and review count as Google displays them">Google shows</th></tr></thead><tbody>
 {% set ns = namespace(brand=None) %}
 {% for r in dist.rows %}{% if r.brand != ns.brand %}{% set ns.brand = r.brand %}<tr class="brand-row"><td colspan="10"><span class="dot {{ r.brand }}"></span>{{ r.brand }}</td></tr>{% endif %}
-<tr class="clickable" onclick="location.href='/sites/{{ r.location_id }}?{{ dr.query() }}'"><td data-sort="{{ r.name }}">{% if r.location_id %}<a class="site-link" href="/sites/{{ r.location_id }}?{{ dr.query() }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
+<tr {% if r.location_id %}class="clickable" onclick="location.href='/sites/{{ r.location_id }}?{{ dr.query() }}'"{% endif %}><td data-sort="{{ r.name }}">{% if r.location_id %}<a class="site-link" href="/sites/{{ r.location_id }}?{{ dr.query() }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}</td>
 {% for c in r.counts %}<td class="num star-cell" {% if loop.index <= 3 and c %}style="color:var(--critical)"{% endif %}>{{ c or '' }}</td>{% endfor %}
 <td class="num"><strong>{{ r.total }}</strong></td><td class="num">{{ r.avg or '–' }}</td><td class="num" {% if r.neg_pct > 8 %}style="color:var(--critical)"{% endif %}>{{ r.neg_pct }}%</td><td class="num muted" data-sort="{{ r.listing_avg or '' }}">{% if r.listing_avg %}{{ r.listing_avg }} <span class="small">({{ r.listing_total }})</span>{% else %}–{% endif %}</td></tr>{% endfor %}
 

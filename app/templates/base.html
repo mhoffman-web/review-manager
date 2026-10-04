@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>{% block title %}Review Manager{% endblock %}</title>
+<title>{% filter trim %}{% block title %}{% endblock %}{% endfilter %}{% if self.title() %} · {% endif %}Review Manager</title>
 <meta name="theme-color" content="#000000"><link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="icon" href="/static/img/app-icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/static/img/app-icon-180.png">
 <script>(function(){try{var t=localStorage.getItem('rm-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
@@ -31,17 +31,17 @@
 {% endif %}
 <main id="main" tabindex="-1">{% block content %}{% endblock %}</main>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden><span class="toast-msg"></span><button type="button" class="toast-undo" hidden>Undo</button><button type="button" class="toast-x" aria-label="Dismiss">&times;</button></div>
-<div id="keysHelp" class="keys-help-panel" hidden role="dialog" aria-label="Keyboard shortcuts">
+<div id="keysHelp" class="keys-help-panel" hidden role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
   <div class="card"><h3>Keyboard shortcuts</h3>
     <dl class="kv keys"><dt>J / K</dt><dd>Next / previous review in the list</dd><dt>Enter or O</dt><dd>Open the selected review</dd><dt>R</dt><dd>Reply (inline in the inbox, focus the box on a review)</dd>
-      <dt>E</dt><dd>Archive the selected review (with Undo)</dd><dt>1–9</dt><dd>Insert the matching template</dd><dt>N / P</dt><dd>Next / previous in queue (review page)</dd>
-      <dt>/</dt><dd>Search</dd><dt>⌘↵</dt><dd>Post the reply</dd><dt>Esc</dt><dd>Close the composer or this panel</dd><dt>?</dt><dd>Show or hide this panel</dd></dl>
+      <dt>E</dt><dd>Archive the selected review (with Undo)</dd><dt>1–9</dt><dd>Insert the matching template</dd><dt>Alt + 1–9</dt><dd>Insert a template while typing in the reply box (Option on a Mac)</dd><dt>N / P</dt><dd>Next / previous in queue (review page)</dd>
+      <dt>/</dt><dd>Search</dd><dt>Ctrl + Enter</dt><dd>Post the reply (⌘ + Enter on a Mac)</dd><dt>Esc</dt><dd>Close the composer or this panel</dd><dt>?</dt><dd>Show or hide this panel</dd></dl>
     <button type="button" class="ghost small" data-keys-help>Close</button></div></div>
 <script src="/static/sort.js"></script>
 <script>(function(){document.querySelectorAll('details[data-ms]').forEach(function(d){var initial=null;d.addEventListener('toggle',function(){if(d.open){initial=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');}else{var now=[].map.call(d.querySelectorAll('input:checked'),function(i){return i.value;}).join(',');if(initial!==null&&now!==initial){d.closest('form').requestSubmit();}}});
 d.querySelector('.ms-all').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=true;});});d.querySelector('.ms-none').addEventListener('click',function(){d.querySelectorAll('input').forEach(function(i){i.checked=false;});});});
 document.addEventListener('click',function(e){document.querySelectorAll('details[data-ms][open]').forEach(function(d){if(!d.contains(e.target))d.open=false;});});})();</script>
-<script>(function(){document.querySelectorAll('form').forEach(function(f){f.addEventListener('submit',function(){f.querySelectorAll('input,select').forEach(function(el){if(el.name&&el.value===''&&el.type!=='checkbox')el.disabled=true;});});});})();</script>
+<script>/* Clean URLs for filter forms: drop empty fields from GET submissions only. POST forms send every field, so a required one is never silently removed. */(function(){document.querySelectorAll('form').forEach(function(f){if((f.getAttribute('method')||'get').toLowerCase()!=='get')return;f.addEventListener('submit',function(){f.querySelectorAll('input,select').forEach(function(el){if(el.name&&el.value===''&&el.type!=='checkbox')el.disabled=true;});});});})();</script>
 <script>(function(){var b=document.getElementById('themeToggle');if(!b)return;function cur(){var t=document.documentElement.getAttribute('data-theme');if(t)return t;return window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
 function label(){b.textContent=cur()==='dark'?'Light mode':'Dark mode';}
 b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('rm-theme',n);}catch(e){}label();window.dispatchEvent(new Event('rm-theme-change'));});label();})();</script>
@@ -50,7 +50,7 @@ b.addEventListener('click',function(){var n=cur()==='dark'?'light':'dark';docume
 // Undo only ever re-posts the archive toggle for that review id; no URL is taken from the query string.
 window.RMtoast=(function(){var el=document.getElementById('toast'),msgEl=el.querySelector('.toast-msg'),undoBtn=el.querySelector('.toast-undo'),timer=null,undoUrl=null;
 function hide(){el.hidden=true;clearTimeout(timer);}
-function show(msg,opts){opts=opts||{};var uid=String(opts.undoArchive==null?'':opts.undoArchive);msgEl.textContent=msg;undoUrl=/^\d{1,12}$/.test(uid)?'/reviews/'+uid+'/archive':null;undoBtn.hidden=!undoUrl;el.classList.toggle('err',!!opts.error);el.hidden=false;clearTimeout(timer);timer=setTimeout(hide,undoUrl?9000:5000);}
+function show(msg,opts){opts=opts||{};var uid=String(opts.undoArchive==null?'':opts.undoArchive);msgEl.textContent='';setTimeout(function(){msgEl.textContent=msg;},60);/* set after the region is visible so screen readers announce it */undoUrl=/^\d{1,12}$/.test(uid)?'/reviews/'+uid+'/archive':null;undoBtn.hidden=!undoUrl;el.classList.toggle('err',!!opts.error);el.hidden=false;clearTimeout(timer);timer=setTimeout(hide,undoUrl?9000:5000);}
 undoBtn.addEventListener('click',function(){if(!undoUrl)return;undoBtn.disabled=true;fetch(undoUrl,{method:'POST',headers:{'Accept':'application/json'}}).then(function(){location.reload();}).catch(function(){location.reload();});});
 el.querySelector('.toast-x').addEventListener('click',hide);
 try{var p=new URLSearchParams(location.search);var m=p.get('msg');if(m){show(m,{undoArchive:p.get('undo_archive'),error:/fail|error|could not/i.test(m)});p.delete('msg');p.delete('undo_archive');p.delete('undo');var qs=p.toString();history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash);}}catch(e){}

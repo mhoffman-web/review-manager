@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% extends "base.html" %}{% block title %}API keys · Admin{% endblock %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('api') }}
 {% if new_key %}<div class="msg ok"><strong>New key created.</strong> Copy it now; it is not shown again.<div style="margin-top:6px"><code id="newKey" style="font-size:13px;user-select:all">{{ new_key }}</code> <button type="button" class="ghost small" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('newKey').textContent).then(function(){this.textContent='Copied'}.bind(this))">Copy</button></div></div>{% endif %}
 <div class="grid side">

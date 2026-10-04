@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import ms %}
+{% extends "base.html" %}{% block title %}{{ active_view.name if active_view else (dict(views)[view] if view in dict(views) else 'Inbox') }}{% if total %} ({{ total }}){% endif %} · Inbox{% endblock %}{% from "_stars.html" import stars, status, site, source_icon, badges %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import ms %}
 {% block content %}
 <div class="tabs" role="tablist">
 {% for key, label in views if key not in ['failed','archived','removed'] or counts.get(key) %}<a href="/?{{ qs|replace('view=' ~ view, 'view=' ~ key) }}" class="{% if view==key and not active_view %}active{% endif %}" {% if key=='removed' %}title="Reviews that stopped appearing on Google: the reviewer deleted them or Google took them down"{% endif %}>{{ label }}{% if counts.get(key) is not none %} <span class="count neutral">{{ counts[key] }}</span>{% endif %}</a>{% endfor %}
@@ -86,18 +86,25 @@ window.RMinbox = (function () {
   }
   function nextOpen(afterId) { var rows = [].slice.call(document.querySelectorAll('tr.clickable[data-open="1"]')); var ids = rows.map(function (r) { return r.dataset.id; }); var i = ids.indexOf(String(afterId)); return ids[i + 1] || null; }
   function chip(n) { if (openId == null) return; var chips = cmp(openId).querySelectorAll('[data-chip]'); var b = chips[n - 1]; if (b) b.click(); }
+  // A fetch after the session expired gets the login page back (a redirect), not JSON.
+  function json(r) { if (r.redirected || r.status === 401) throw new Error('signed-out'); return r.json().then(function (j) { j._status = r.status; return j; }); }
+  function failMsg(err, what) { return err && err.message === 'signed-out' ? 'You were signed out. Reload the page to sign in again.' : 'Could not ' + what + '. Check the connection and try again.'; }
   function archive(id) {
-    fetch('/reviews/' + id + '/archive', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) return; var r = row(id); if (r) { var c = cmp(id); if (c) c.remove(); r.remove(); }
+    fetch('/reviews/' + id + '/archive', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(json).then(function (j) {
+      if (!j.ok) { RMtoast.show(j.error || 'Could not archive', { error: true }); return; }
+      var r = row(id); if (r) { var c = cmp(id); if (c) c.remove(); r.remove(); }
       RMtoast.show(j.msg, { undoArchive: j.undo_archive });
-    }).catch(function () { RMtoast.show('Could not archive', { error: true }); });
+    }).catch(function (err) { RMtoast.show(failMsg(err, 'archive'), { error: true }); });
   }
   function post(id, goNext, force) {
     var c = cmp(id), ta = c.querySelector('textarea'), st = c.querySelector('.st'), wb = c.querySelector('.warn-box');
     var text = ta.value.trim(); if (!text) { ta.focus(); return; }
+    if (c.dataset.busy === '1') return;            // Cmd+Enter pressed twice, or a double click
+    c.dataset.busy = '1';
     var fd = new FormData(); fd.append('text', text); fd.append('template_id', c.dataset.tplId || '0'); fd.append('ai_generated', c.dataset.aiFlag || '0'); fd.append('force', force ? '1' : '0'); fd.append('go_next', goNext ? '1' : '0');
     st.textContent = 'Posting…'; c.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-    fetch('/reviews/' + id + '/reply', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }).then(function (j) {
+    fetch('/reviews/' + id + '/reply', { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } }).then(json).then(function (j) {
+      c.dataset.busy = '';
       c.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
       if (j.warnings) { wb.hidden = false; wb.innerHTML = '<strong>Before this goes public:</strong><ul>' + j.warnings.map(function (w) { return '<li>' + w.replace(/</g, '&lt;') + '</li>'; }).join('') + '</ul><button type="button" class="ghost small" data-force>Post anyway</button> <button type="button" class="ghost small" data-fix>Edit first</button>'; st.textContent = ''; return; }
       if (!j.ok) { st.textContent = j.error || j.msg || 'Failed'; RMtoast.show(j.error || j.msg || 'Posting failed', { error: true }); return; }
@@ -106,14 +113,21 @@ window.RMinbox = (function () {
       if (r) { r.removeAttribute('data-open'); r.classList.add('just-replied'); }
       var nx = goNext ? nextOpen(id) : null; close(); c.remove();
       RMtoast.show(j.msg); if (nx) open(nx);
-    }).catch(function () { c.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); st.textContent = 'Network error'; });
+    }).catch(function (err) { c.dataset.busy = ''; c.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); st.textContent = failMsg(err, 'post'); });
   }
   document.addEventListener('click', function (e) {
     var t = e.target.closest('[data-reply]'); if (t) { e.preventDefault(); e.stopPropagation(); if (openId == t.dataset.reply) close(); else open(t.dataset.reply); return; }
     var c = e.target.closest('.composer'); if (!c) return;
     var id = c.dataset.id, ta = c.querySelector('textarea');
     if (e.target.closest('[data-chip]')) { var b = e.target.closest('[data-chip]'); if (ta.value.trim() && !confirm('Replace the current draft with this template?')) return; ta.value = b.dataset.body; c.dataset.tplId = b.dataset.tpl; c.dataset.aiFlag = '0'; c.querySelector('.cc').textContent = ta.value.length; ta.focus(); }
-    else if (e.target.closest('[data-draft]')) { var st = c.querySelector('.st'); st.textContent = 'Drafting…'; fetch('/reviews/' + id + '/draft', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (j) { if (j.ok) { ta.value = j.text; c.dataset.aiFlag = '1'; c.dataset.tplId = '0'; c.querySelector('.cc').textContent = ta.value.length; st.textContent = 'Draft ready. Read it before posting.'; } else { st.textContent = j.error || 'Drafting failed'; } }).catch(function () { st.textContent = 'Drafting failed'; }); }
+    else if (e.target.closest('[data-draft]')) {
+      var db = e.target.closest('[data-draft]'), st = c.querySelector('.st');
+      if (db.disabled) return;
+      if (ta.value.trim() && !confirm('Replace the current draft with an AI draft?')) return;
+      db.disabled = true; st.textContent = 'Drafting…';
+      fetch('/reviews/' + id + '/draft', { method: 'POST', headers: { 'Accept': 'application/json' } }).then(json).then(function (j) { if (j.ok) { ta.value = j.text; c.dataset.aiFlag = '1'; c.dataset.tplId = '0'; c.querySelector('.cc').textContent = ta.value.length; st.textContent = 'Draft ready. Read it before posting.'; } else { st.textContent = j.error || 'Drafting failed'; } })
+        .catch(function (err) { st.textContent = failMsg(err, 'draft'); }).finally(function () { db.disabled = false; });
+    }
     else if (e.target.closest('[data-post]')) post(id, false, false);
     else if (e.target.closest('[data-post-next]')) post(id, true, false);
     else if (e.target.closest('[data-force]')) post(id, false, true);

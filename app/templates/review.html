@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars, site, source_icon, badges, change_badge %}
+{% extends "base.html" %}{% block title %}{{ r.rating ~ '★ ' if r.rating }}{{ r.author_name or 'Anonymous' }} · {{ r.location.name if r.location else 'Review' }}{% endblock %}{% from "_stars.html" import stars, site, source_icon, badges, change_badge %}
 {% block content %}
 <div class="page-head"><a href="/{{ '?' ~ ctx if ctx else '' }}">&larr; Inbox</a>
   <span class="right small">{% if nav_links.pos %}<span class="muted">{{ nav_links.pos }} of {{ nav_links.total }} in this list</span>{% endif %}
@@ -20,7 +20,7 @@
     <p class="review-text" style="margin:0">{% if r.is_rating_only %}<span class="muted">The customer left a rating with no written review.</span>{% else %}{{ r.text }}{% endif %}</p>
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       {% for m in r.mentions %}<span class="pill emp">@{{ m.name }}{% if m.employee %} <span class="muted">· {{ m.employee.location.name if m.employee.location else 'roster' }}</span>{% endif %} <form method="post" action="/reviews/{{ r.id }}/mentions/{{ m.id }}/delete" style="display:inline"><button class="x" title="Remove" aria-label="Remove {{ m.name }} tag">&times;</button></form></span>{% endfor %}
-      <form method="post" action="/reviews/{{ r.id }}/mentions" style="display:inline-flex;gap:4px"><input type="text" name="name" placeholder="Tag an employee" aria-label="Tag an employee" style="padding:3px 8px;font-size:12px;width:150px"><button class="ghost small">Add</button></form>
+      <form method="post" action="/reviews/{{ r.id }}/mentions" style="display:inline-flex;gap:4px"><input type="text" name="name" required maxlength="80" placeholder="Tag an employee" aria-label="Tag an employee" style="padding:3px 8px;font-size:12px;width:150px"><button class="ghost small">Add</button></form>
     </div>
   </div>
 
@@ -68,7 +68,7 @@
     <form method="post" action="/reviews/{{ r.id }}/report"><input type="hidden" name="action" value="reported"><input type="text" name="note" placeholder="Why (optional), e.g. not a customer" aria-label="Reason" style="width:100%;margin-bottom:6px"><button class="ghost small">Mark as reported</button></form>
     {% elif r.is_disputed %}
     <p class="small" style="margin:0 0 8px"><span class="pill small warn">Disputed</span> Reported {{ r.reported_at|local }}{% if r.reported_by %} by {{ r.reported_by.name }}{% endif %}. Google usually emails within a few days. Record the outcome:</p>
-    <form method="post" action="/reviews/{{ r.id }}/report" style="display:flex;gap:6px;flex-wrap:wrap"><input type="text" name="note" placeholder="Note (optional)" aria-label="Outcome note" style="flex:1;min-width:120px"><button class="ghost small" name="action" value="removed">Google removed it</button><button class="ghost small" name="action" value="kept">Google kept it</button><button class="ghost small" name="action" value="clear" title="Reported by mistake">Clear</button></form>
+    <form method="post" action="/reviews/{{ r.id }}/report" style="display:flex;gap:6px;flex-wrap:wrap"><select name="action" required aria-label="What did Google decide?"><option value="">What did Google decide?</option><option value="removed">Google removed it</option><option value="kept">Google kept it</option><option value="clear">Reported by mistake (clear)</option></select><input type="text" name="note" maxlength="300" placeholder="Note (optional)" aria-label="Outcome note" style="flex:1;min-width:120px"><button class="ghost small">Save outcome</button></form>
     {% else %}
     <p class="small" style="margin:0 0 8px">Reported {{ r.reported_at|local('%b %-d') }}; outcome: <strong>{{ 'Google removed it' if r.report_status == 'removed' else 'Google kept it' }}</strong>.{% if r.report_note %} {{ r.report_note }}{% endif %}</p>
     <form method="post" action="/reviews/{{ r.id }}/report"><button class="ghost small" name="action" value="clear">Clear report</button></form>
@@ -101,7 +101,14 @@
     function persist(){ try { if (ta.value.trim()) sessionStorage.setItem(key, ta.value); else sessionStorage.removeItem(key); } catch (e) {} }
     ta.addEventListener('input', function(){ count(); persist(); tplId.value = 0; aiFlag.value = 0; force.value = 0; }); count();
     {% if warnings %}force.value = 1; /* the person has seen the warnings; the next submit is deliberate unless they edit */{% endif %}
-    document.getElementById('replyForm').addEventListener('submit', function(){ try { sessionStorage.removeItem(key); } catch (e) {} });
+    document.getElementById('replyForm').addEventListener('submit', function(e){
+      var f = e.target;
+      if (f.dataset.submitting) { e.preventDefault(); return; }   // Cmd+Enter twice, or a double click: post once
+      f.dataset.submitting = '1';
+      // Disable after the browser has read the clicked button's value (Post vs Post & next).
+      setTimeout(function(){ f.querySelectorAll('button').forEach(function(b){ b.disabled = true; }); }, 0);
+      try { sessionStorage.removeItem(key); } catch (err) {}
+    });
     document.querySelectorAll('.chip[data-tpl]').forEach(function(b){
       b.addEventListener('click', function(){
         var t = tpls.find(function(x){ return String(x.id) === b.dataset.tpl; });

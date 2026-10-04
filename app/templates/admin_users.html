@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% extends "base.html" %}{% block title %}Users · Admin{% endblock %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('users') }}
 {% if link %}<div class="msg ok"><strong>{{ msg }}</strong> Email is not configured on this server, so share this set-password link with them (valid 48 hours, works once):<div style="margin-top:6px"><code id="pwLink" style="font-size:12px;word-break:break-all;user-select:all">{{ link }}</code> <button type="button" class="ghost small" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('pwLink').textContent).then(function(){this.textContent='Copied'}.bind(this))">Copy</button></div></div>{% endif %}
 <div class="grid side">

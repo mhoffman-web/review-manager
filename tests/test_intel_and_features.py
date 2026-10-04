@@ -434,3 +434,23 @@ def test_ai_cut_off_answers_are_unavailable_not_unknown(db, monkeypatch):
     with pytest.raises(ai.AiUnavailable):
         ai.draft_reply(r)
     assert calls["max_tokens"] >= 2000
+
+
+def test_queue_keeps_its_place_after_a_reply(db, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.web import app, _neighbors
+    import app.web as web
+    s, loc, link = db
+    rs = [mk(s, link, f"qq{i}", 1, f"bad {i}", days_ago=10 - i) for i in range(5)]     # oldest first
+    s.commit()
+    user = s.query(User).first()
+    ctx = "view=unanswered&q=&range=&start=&end=&sort=&dir=asc&sv=0&page=1"
+    assert _neighbors(s, rs[2], user, ctx)["next"] == rs[3].id
+    rs[2].has_owner_reply = True; s.commit()                       # it leaves the unanswered queue
+    nb = _neighbors(s, rs[2], user, ctx)
+    assert nb["next"] == rs[3].id and nb["prev"] == rs[1].id         # not the top of the list
+    # coming back to a page beyond the end shows the last page, not an empty one
+    c = TestClient(app); c.post("/login", data={"email": "lily@x.com", "password": "dev-password-lily-2026"})
+    page = c.get("/?view=all&page=99").text
+    assert "bad 4" in page
+    assert "page%3D1" in page and "· Inbox · Review Manager</title>" in page

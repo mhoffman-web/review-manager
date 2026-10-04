@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% extends "base.html" %}{% block title %}Site groups · Admin{% endblock %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('groups') }}
 <div class="grid side">
 <div class="card table-scroll" style="padding:0"><table><thead><tr><th>Group</th><th>Sites</th><th></th></tr></thead><tbody>

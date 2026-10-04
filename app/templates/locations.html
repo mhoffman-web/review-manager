@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "base.html" %}{% block title %}Listings & sync{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Listings</h1>
 {% if user.is_admin %}<span class="right"><a class="chip" href="/admin/sites">Add or edit sites</a><form method="post" action="/sync" style="display:inline-flex;gap:8px;align-items:center"><label class="inline small"><input type="checkbox" name="full" value="1"> full re-pull</label><button class="primary">Sync now</button></form></span>{% endif %}</div>

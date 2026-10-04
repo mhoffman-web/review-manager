@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_admin_tabs.html" import admin_tabs %}
+{% extends "base.html" %}{% block title %}Email recipients · Admin{% endblock %}{% from "_admin_tabs.html" import admin_tabs %}
 {% block content %}{{ admin_tabs('recipients') }}
 {% if notice %}<div class="msg {{ 'ok' if (notice.added or notice.existing) else 'err' }}">
   {% if notice.added %}Added {{ notice.added }} to {{ RECIPIENT_LISTS[notice.ed].label }}.{% endif %}

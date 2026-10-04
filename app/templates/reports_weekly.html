@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_filters.html" import ms %}
+{% extends "base.html" %}{% block title %}Last week & quarter to date{% endblock %}{% from "_filters.html" import ms %}
 {% block content %}
 <div class="page-head"><a href="/reports">&larr; Reports</a><h1>Last week &amp; quarter to date</h1>
   <span class="muted small">Last week {{ lw.start_date.strftime('%b %-d') }} – {{ lw.end_date.strftime('%b %-d') }} (Mon–Sun) · QTD {{ qtd.start_date.strftime('%b %-d') }} – {{ qtd.end_date.strftime('%b %-d') }}</span>

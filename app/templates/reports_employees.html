@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% from "_stars.html" import stars %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
+{% extends "base.html" %}{% block title %}Team · {{ dr.label }}{% endblock %}{% from "_stars.html" import stars %}{% from "_range.html" import range_fields, range_label %}{% from "_filters.html" import report_filters %}
 {% block content %}
 <div class="page-head"><h1>Team recognition</h1><span class="muted small">Employees customers name in their reviews · {{ range_label(dr) }}</span>
   </div>
