@@ -256,3 +256,14 @@ def test_base_url_and_render_worker_guard(monkeypatch):
     assert any("APP_BASE_URL" in p for p in st.fatal_config_problems())
     monkeypatch.setattr(st, "app_base_url", "https://review-manager.onrender.com")
     assert st.fatal_config_problems() == []
+
+
+def test_blank_settings_fall_back_to_defaults(monkeypatch):
+    """Render's Blueprint prompts create variables with empty values; empty means the default."""
+    from app.config import _env
+    monkeypatch.setenv("RM_TEST_BLANK", "")
+    monkeypatch.setenv("RM_TEST_SPACE", "   ")
+    monkeypatch.setenv("RM_TEST_SET", "x")
+    monkeypatch.delenv("RM_TEST_UNSET", raising=False)
+    assert _env("RM_TEST_BLANK", "d") == "d" and _env("RM_TEST_SPACE", "d") == "d"
+    assert _env("RM_TEST_UNSET", "d") == "d" and _env("RM_TEST_SET", "d") == "x"

@@ -12,6 +12,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _env(name: str, default: str) -> str:
+    """The variable's value, or `default` when it is unset OR blank. Hosting dashboards (Render's
+    Blueprint prompts) create variables with an empty value; that must mean "use the default"."""
+    value = os.getenv(name)
+    return default if value is None or value.strip() == "" else value
+
+
 def _bool(value: Optional[str], default: bool) -> bool:
     if value is None or value == "":
         return default
@@ -53,29 +60,29 @@ class Settings:
     app_base_url: str = _base_url(os.getenv("APP_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000")
     # DEMO_MODE=true seeds placeholder data on startup when the database is empty (hosted demo only).
     demo_mode: bool = _bool(os.getenv("DEMO_MODE"), False)
-    timezone: str = os.getenv("TIMEZONE", "America/Chicago")
+    timezone: str = _env("TIMEZONE", "America/Chicago")
 
-    google_client_secrets_file: str = os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "./client_secret.json")
-    google_token_file: str = os.getenv("GOOGLE_TOKEN_FILE", "./google_token.json")
+    google_client_secrets_file: str = _env("GOOGLE_CLIENT_SECRETS_FILE", "./client_secret.json")
+    google_token_file: str = _env("GOOGLE_TOKEN_FILE", "./google_token.json")
     google_token_json: Optional[str] = os.getenv("GOOGLE_TOKEN_JSON") or None
 
-    sync_interval_minutes: int = int(os.getenv("SYNC_INTERVAL_MINUTES", "20"))
+    sync_interval_minutes: int = int(_env("SYNC_INTERVAL_MINUTES", "20"))
     # One full re-pull per day (catches reviews that were removed) at or after this local hour.
-    full_sync_hour_local: int = int(os.getenv("FULL_SYNC_HOUR_LOCAL", "3"))
+    full_sync_hour_local: int = int(_env("FULL_SYNC_HOUR_LOCAL", "3"))
     # A review is marked removed only after it has been missing from this many consecutive
     # successful full pulls (2 = today's and yesterday's). 1 trusts a single pull.
-    removal_confirm_pulls: int = int(os.getenv("REMOVAL_CONFIRM_PULLS", "2"))
+    removal_confirm_pulls: int = int(_env("REMOVAL_CONFIRM_PULLS", "2"))
     # Instant alerts (new negative reviews, removed reviews, sync failures) go to the "alerts" recipient list.
     alert_negatives: bool = _bool(os.getenv("ALERT_NEGATIVES"), True)
-    alert_fail_threshold: int = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
+    alert_fail_threshold: int = int(_env("ALERT_FAIL_THRESHOLD", "3"))
     # Reviews we have reported to Google and are awaiting a decision on are left out of averages.
     exclude_disputed: bool = _bool(os.getenv("EXCLUDE_DISPUTED"), True)
     # Signed-in sessions expire after this many hours without activity.
-    session_hours: int = int(os.getenv("SESSION_HOURS", "12"))
+    session_hours: int = int(_env("SESSION_HOURS", "12"))
     # Hard cap on one sign-in, however actively it is used (the idle timeout above slides).
-    session_max_days: int = int(os.getenv("SESSION_MAX_DAYS", "7"))
+    session_max_days: int = int(_env("SESSION_MAX_DAYS", "7"))
     # Password login: this many failed attempts per email or address within 15 minutes locks it for 15 minutes.
-    login_max_attempts: int = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+    login_max_attempts: int = int(_env("LOGIN_MAX_ATTEMPTS", "5"))
     # How many proxies sit in front of the app and append to X-Forwarded-For. Render runs one;
     # 0 = use the socket address and ignore the header entirely.
     trusted_proxy_hops: int = int(os.getenv("TRUSTED_PROXY_HOPS") or ("1" if os.getenv("RENDER") else "0"))
@@ -83,29 +90,29 @@ class Settings:
     # pages_read_engagement and pages_manage_engagement on every brand page.
     facebook_access_token: Optional[str] = os.getenv("FACEBOOK_ACCESS_TOKEN") or None
     # Browser origins allowed to call the read-only JSON API (the Teams Portal), comma-separated.
-    api_cors_origins: List[str] = field(default_factory=lambda: _csv(os.getenv("API_CORS_ORIGINS", "https://chris-stacks.washucarwash.com")))
-    facebook_api_version: str = os.getenv("FACEBOOK_API_VERSION", "v21.0")
-    report_hour_local: int = int(os.getenv("REPORT_HOUR_LOCAL", "7"))
+    api_cors_origins: List[str] = field(default_factory=lambda: _csv(_env("API_CORS_ORIGINS", "https://chris-stacks.washucarwash.com")))
+    facebook_api_version: str = _env("FACEBOOK_API_VERSION", "v21.0")
+    report_hour_local: int = int(_env("REPORT_HOUR_LOCAL", "7"))
     report_recipients_fallback: List[str] = field(default_factory=lambda: _csv(os.getenv("REPORT_RECIPIENTS")))
 
-    smtp_host: str = os.getenv("SMTP_HOST", "smtp.office365.com")
-    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
+    smtp_host: str = _env("SMTP_HOST", "smtp.office365.com")
+    smtp_port: int = int(_env("SMTP_PORT", "587"))
     smtp_starttls: bool = _bool(os.getenv("SMTP_STARTTLS"), True)
     smtp_user: Optional[str] = os.getenv("SMTP_USER") or None
     smtp_password: Optional[str] = os.getenv("SMTP_PASSWORD") or None
-    smtp_from: str = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", "reviews@example.com"))
+    smtp_from: str = _env("SMTP_FROM", _env("SMTP_USER", "reviews@example.com"))
 
     # Reviews at or below this star rating are treated as negative.
-    negative_rating_max: int = int(os.getenv("NEGATIVE_RATING_MAX", "3"))
+    negative_rating_max: int = int(_env("NEGATIVE_RATING_MAX", "3"))
     # Unanswered reviews older than this many hours are flagged as overdue.
-    overdue_hours: int = int(os.getenv("OVERDUE_HOURS", "48"))
+    overdue_hours: int = int(_env("OVERDUE_HOURS", "48"))
 
     # AI drafting (Anthropic). Leave the key unset to hide the Draft button.
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY") or None
-    ai_model: str = os.getenv("AI_MODEL", "claude-opus-5-5")
+    ai_model: str = _env("AI_MODEL", "claude-opus-5-5")
     # Phone number the AI may include in replies to negative reviews, per brand.
     brand_phones: Dict[str, str] = field(default_factory=lambda: dict(
-        kv.split("=", 1) for kv in _csv(os.getenv("BRAND_PHONES", "WashU=(815) 205-3492;ICON=(615) 776-7837;WA=(615) 776-7837").replace(";", ",")) if "=" in kv))
+        kv.split("=", 1) for kv in _csv(_env("BRAND_PHONES", "WashU=(815) 205-3492;ICON=(615) 776-7837;WA=(615) 776-7837").replace(";", ",")) if "=" in kv))
 
     # Group negative reviews into the workbook categories with Claude as they arrive (needs the key).
     ai_classify: bool = _bool(os.getenv("AI_CLASSIFY"), True)
@@ -123,10 +130,10 @@ class Settings:
     ms_client_id: Optional[str] = os.getenv("MS_CLIENT_ID") or None
     ms_client_secret: Optional[str] = os.getenv("MS_CLIENT_SECRET") or None
     # Tenant id for a single-tenant registration, or "organizations" for any work account.
-    ms_tenant: str = os.getenv("MS_TENANT_ID", "organizations")
+    ms_tenant: str = _env("MS_TENANT_ID", "organizations")
     # Only these email domains may sign in with Microsoft.
     sso_allowed_domains: List[str] = field(default_factory=lambda: [d.lower() for d in _csv(
-        os.getenv("SSO_ALLOWED_DOMAINS", "washucarwash.com,washassociates.com,iconcarwash.com"))])
+        _env("SSO_ALLOWED_DOMAINS", "washucarwash.com,washassociates.com,iconcarwash.com"))])
     # Entra tenant ids (comma-separated) allowed to sign in. Required when MS_TENANT_ID is the
     # multi-tenant "organizations"/"common": an email claim is only trustworthy from a tenant we
     # know, because any stranger's own tenant can mint a user whose mail is one of ours.
@@ -209,7 +216,7 @@ class Settings:
     # Wash N' Roll profiles are intentionally left alone; the ICON profiles were
     # started fresh on purpose. Override with LISTING_EXCLUDE_PATTERNS=a,b,c
     listing_exclude_patterns: List[str] = field(default_factory=lambda: _csv(
-        os.getenv("LISTING_EXCLUDE_PATTERNS", "wash n' roll,wash n roll,wash n’ roll")))
+        _env("LISTING_EXCLUDE_PATTERNS", "wash n' roll,wash n roll,wash n’ roll")))
 
 
 settings = Settings()
