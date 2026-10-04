@@ -155,6 +155,38 @@ def _filter_ctx(db: Session) -> dict:
             "groups": db.execute(select(SiteGroup).order_by(SiteGroup.name)).scalars().all(), "brands": _brands(db)}
 
 
+_UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _origin_ok(request: Request) -> bool:
+    """Cross-site request forgery guard for every state-changing request.
+
+    Browsers send Origin on every POST (and Referer unless told not to). A form or fetch from
+    another site, a sibling subdomain or a sandboxed frame ("null") is refused; requests with
+    neither header (curl, the API, tests) carry no ambient browser session to abuse."""
+    origin = request.headers.get("origin")
+    source = origin if origin is not None else request.headers.get("referer")
+    if source is None:
+        return True
+    if source == "null":
+        return False
+    from urllib.parse import urlsplit
+    host = urlsplit(source).netloc.lower()
+    allowed = {request.url.netloc.lower(), (request.headers.get("host") or "").lower(),
+               urlsplit(settings.app_base_url).netloc.lower()}
+    return bool(host) and host in allowed
+
+
+@app.middleware("http")
+async def _csrf_guard(request: Request, call_next):
+    if request.method in _UNSAFE and not _origin_ok(request):
+        log.warning("refused cross-site %s %s from %s", request.method, request.url.path,
+                    request.headers.get("origin") or request.headers.get("referer"))
+        return HTMLResponse("<h1>Request refused</h1><p>This form was submitted from another site. Go back to Review Manager and try again.</p>",
+                            status_code=403)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _renew_session(request: Request, call_next):
     """Sliding session: re-issue the cookie about once an hour while the person keeps using the app."""
@@ -224,7 +256,8 @@ def _sync_health(db: Session) -> dict:
     failing = db.execute(select(func.count()).select_from(ReviewSourceLink)
                          .where(ReviewSourceLink.active.is_(True), ReviewSourceLink.fail_count >= 1)).scalar() or 0
     next_due = (last + interval) if last else None
-    stale = bool(last) and (now - last) > interval * 2
+    # The demo has no worker, so "overdue" would be a permanent false alarm there.
+    stale = bool(last) and (now - last) > interval * 2 and not settings.demo_mode
     return {"last_sync": last, "next_due": next_due, "next_in_min": max(0, int((next_due - now).total_seconds() // 60)) if next_due else None,
             "stale": stale, "failing": failing, "interval_min": settings.sync_interval_minutes}
 
@@ -411,11 +444,26 @@ def change_password(user: User = Depends(auth.current_user), db: Session = Depen
     return RedirectResponse(url="/account?msg=Password+saved", status_code=303)
 
 
-@app.get("/health")
-def health(db: Session = Depends(get_db)):
+def _health_body(db: Session) -> dict:
     h = _sync_health(db)
     return {"ok": not h["stale"] and not h["failing"], "last_sync_finished_at": h["last_sync"].isoformat() if h["last_sync"] else None,
-            "next_sync_due": h["next_due"].isoformat() if h["next_due"] else None, "stale": h["stale"], "failing_listings": h["failing"]}
+            "next_sync_due": h["next_due"].isoformat() if h["next_due"] else None, "stale": h["stale"], "failing_listings": h["failing"],
+            "demo": settings.demo_mode}
+
+
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    """Liveness for the host (Render restarts the web service when this fails): 200 whenever the
+    app and its database answer, so a stalled worker never takes the UI down with it. The sync
+    state is in the body; monitors that alert on status codes use /health/sync."""
+    return _health_body(db)
+
+
+@app.get("/health/sync")
+def health_sync(db: Session = Depends(get_db)):
+    """For uptime monitors: 503 when syncing is overdue or a listing is failing, 200 otherwise."""
+    body = _health_body(db)
+    return JSONResponse(body, status_code=200 if body["ok"] else 503)
 
 
 # ----------------------------------------------------------------- inbox

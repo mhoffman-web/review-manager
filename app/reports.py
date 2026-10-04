@@ -254,6 +254,17 @@ class WindowReport:
 
 
 def _window_reviews(session: Session, dr: DateRange, brands: Optional[List[str]], location_ids: Optional[List[int]]) -> List[Review]:
+    """Reviews in a window, loaded once per database session: a report page asks for the same
+    window from five or six helpers. The memo is dropped whenever the session writes."""
+    key = ("window", dr.start, dr.end, tuple(sorted(brands or [])) if brands else None,
+           tuple(sorted(location_ids)) if location_ids is not None else None, settings.exclude_disputed)
+    memo = session.info.setdefault("rm_window_memo", {})
+    if key not in memo:
+        memo[key] = _load_window(session, dr, brands, location_ids)
+    return list(memo[key])
+
+
+def _load_window(session: Session, dr: DateRange, brands: Optional[List[str]], location_ids: Optional[List[int]]) -> List[Review]:
     q = (select(Review)
          .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
          .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
@@ -876,20 +887,21 @@ def already_sent_today(session: Session) -> bool:
 # ----------------------------------------------------------------------------- monthly summary (fixed 12 months, for the table)
 def monthly_summary(session: Session, brands: Optional[List[str]] = None, months: int = 12,
                     as_of_utc: Optional[datetime] = None, location_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
-    as_of_utc = as_of_utc or datetime.utcnow()
-    first = as_of_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    y, m = first.year, first.month
+    # Months are LOCAL calendar months, like every other report: a review posted at 9 PM
+    # Central on the 31st belongs to that month, not the next one in UTC.
+    tz, utc = ZoneInfo(settings.timezone), ZoneInfo("UTC")
+    as_of_local = (as_of_utc or datetime.utcnow()).replace(tzinfo=utc).astimezone(tz)
+    y, m = as_of_local.year, as_of_local.month
     for _ in range(months - 1):
         m -= 1
         if m == 0:
             m, y = 12, y - 1
-    start = first.replace(year=y, month=m)
-    from .daterange import DateRange as _DR
-    dr = _DR(preset="custom", start_date=start.date(), end_date=as_of_utc.date(), start=start, end=as_of_utc + timedelta(seconds=1), label="")
+    dr = resolve_range("custom", date(y, m, 1).isoformat(), as_of_local.date().isoformat())
     buckets: Dict[str, Dict[str, Any]] = {}
     for r in _window_reviews(session, dr, brands, location_ids):
-        key = r.created_at_source.strftime("%Y-%m")
-        b = buckets.setdefault(key, {"month": key, "label": r.created_at_source.strftime("%b %Y"), "ratings": [], "n": 0, "positive": 0, "neutral": 0, "negative": 0, "answered": 0, "resp_h": []})
+        local = r.created_at_source.replace(tzinfo=utc).astimezone(tz)
+        key = local.strftime("%Y-%m")
+        b = buckets.setdefault(key, {"month": key, "label": local.strftime("%b %Y"), "ratings": [], "n": 0, "positive": 0, "neutral": 0, "negative": 0, "answered": 0, "resp_h": []})
         b["n"] += 1
         if r.rating:
             b["ratings"].append(r.rating)
@@ -906,3 +918,14 @@ def monthly_summary(session: Session, brands: Optional[List[str]] = None, months
         rows.append({"month": b["month"], "label": b["label"], "n": b["n"], "avg": _avg(b["ratings"]), "positive": b["positive"], "neutral": b["neutral"],
                      "negative": b["negative"], "response_rate": round(100.0 * b["answered"] / b["n"], 0) if b["n"] else None, "median_response_h": _median(b["resp_h"])})
     return rows
+
+
+from sqlalchemy import event as _event  # noqa: E402
+from sqlalchemy.orm import Session as _Session  # noqa: E402
+
+
+@_event.listens_for(_Session, "after_flush")
+@_event.listens_for(_Session, "after_commit")
+@_event.listens_for(_Session, "after_rollback")
+def _drop_window_memo(session, *_args):
+    session.info.pop("rm_window_memo", None)

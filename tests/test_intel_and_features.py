@@ -237,11 +237,11 @@ def test_web_views_archive_draft_and_admin(db, monkeypatch):
     # report to Google: disputed reviews leave the figures until Google decides
     before_total = rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"]
     c.post(f"/reviews/{r.id}/report", data={"action": "reported", "note": "not a customer"}, follow_redirects=False)
-    s.expire_all()
+    s.rollback()          # end this session's read transaction so it sees the web request's write
     assert s.get(Review, r.id).is_disputed and rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"] == before_total - 1
     assert "Disputed" in c.get("/?view=all").text
     c.post(f"/reviews/{r.id}/report", data={"action": "kept"}, follow_redirects=False)
-    s.expire_all()
+    s.rollback()
     assert s.get(Review, r.id).report_status == "kept" and rating_distribution(s, resolve_range("last30"), location_ids=[loc.id])["total"] == before_total
     # a hand-set theme survives re-classification and feeds the AI examples
     c.post(f"/reviews/{r.id}/note", data={"note": "", "category": "Dryer"}, follow_redirects=False)

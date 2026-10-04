@@ -31,4 +31,4 @@ services:
       - key: PASSWORD_LOGIN_ENABLED
         value: "true"
       - key: LISTING_EXCLUDE_PATTERNS
-        value: "wash n' roll,wash n roll"
+        value: "wash n' roll,wash n roll,wash n’ roll"

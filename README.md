@@ -8,13 +8,18 @@ second platform (Yelp, Facebook) is a new adapter file, not a rewrite.
 review_manager/
   cli.py                 all operator commands (see below)
   app/config.py          settings from .env
-  app/models.py          schema: locations, review_sources, reviews, responses, sync_runs, users, report_recipients, report_sends
-  app/sources/base.py    adapter interface every platform implements
-  app/sources/google.py  Google Business Profile: OAuth, discovery, reviews, reply/delete
-  app/sync.py            backfill + incremental upsert
-  app/reports.py         morning report (24h / 7d / 30d, negatives, overdue) + email send
-  app/web.py             FastAPI UI: inbox, reply, reports, locations/sync admin
-  app/worker.py          always-on loop: sync every N min, report once a day
+  app/models.py          schema (17 tables): locations, review_sources (listings), reviews, responses,
+                         review_events, review_mentions, sync_runs, users, api_keys, report_recipients,
+                         report_sends, reply_templates, ai_rules, employees, saved_views, site_groups,
+                         site_group_members
+  app/sources/           one adapter per platform: google.py, facebook.py (base.py = the interface)
+  app/sync.py            backfill + incremental upsert, removal detection, bulk AI grouping
+  app/reports.py         reports, morning digest editions, monthly summary, email send
+  app/alerts.py          instant alerts (new negatives, lowered ratings, removals, failing listings)
+  app/api.py             read-only JSON API for the Teams Portal
+  app/backup.py          whole-database backup / restore (python cli.py backup)
+  app/web.py             FastAPI UI: inbox, reply, reports, admin
+  app/worker.py          always-on loop: sync every N min, daily full pull, morning report
   data/locations_seed.csv  the 23 sites with brand/state/Snowflake ids
   tests/                 offline tests with a fake adapter
 ```
@@ -22,9 +27,9 @@ review_manager/
 ## What the app does today (verified with placeholder data, 2026-10-03, second pass)
 
 * **Inbox** – tabs for *Needs attention* (unanswered negatives first, then anything
-  overdue in the last 90 days), *Unanswered*, *Mine*, *Negative*, *Last 7 days*,
-  *All*; brand/site/rating filters and text search; one-click **Claim** so Lily
-  and Sarah never answer the same review twice.
+  overdue in the last 90 days), *Unanswered*, *Negative*, *Replied*, *All*, and,
+  when they have anything in them, *Failed*, *Archived* and *Removed*; any date
+  range; brand/group/site/rating filters and text search; saved views as extra tabs.
 * **Review page** – reply composer with canned **templates** (placeholders
   `{first_name} {site} {brand} {agent}` filled in), character counter against
   Google's 4,096 limit, draft autosave, Cmd/Ctrl+Enter to post, *Post & next* to
@@ -65,7 +70,7 @@ review_manager/
   for any as-of date.
 * **Exports** – CSV / Excel of any inbox list and of the distribution report.
 * **Read-only API** (`/api/v1/…`) for the Teams Portal and other screens, keyed
-  from Admin → API keys. See §9.
+  from Admin → API keys. See section 10.
 * **Admin → Sites & listings** – add a site, discover its Google Business Profile
   (or Facebook page), map unmapped listings, or record a listing by id.
 * **Keyboard shortcuts** (press `?`), phone layout, print stylesheet, add-to-home-screen manifest.
@@ -203,8 +208,9 @@ the email looks like.
 
 Admin → Report recipients has a fourth column, **Instant alerts**. Addresses on it
 get one email per sync run that found something: new negative reviews (first seen
-in the last 36 hours, posted in the last 14 days, so a backfill never floods
-anyone), reviews that stopped appearing on Google (the reviewer deleted them or
+in the last 36 hours, posted in the last 14 days, and not already answered, so a
+backfill never floods anyone), older reviews whose rating was lowered into
+negative (a 5★ changed to 1★), reviews that stopped appearing on Google (the reviewer deleted them or
 Google took them down; the last known version is kept), and listings that failed
 `ALERT_FAIL_THRESHOLD` syncs in a row. Nothing is stamped as sent until a
 recipient exists, so alerts start flowing the moment someone is added.
@@ -367,22 +373,12 @@ values from the Rinsed share, so review tables export cleanly for joins against
 washes, signups, and churn by site. The 8 ex-WNR ICON sites have no ids yet;
 fill them in once those stores are on Sonny's and flowing into the share.
 
-## Local notes (this Mac)
+## 10. Read-only API (Teams Portal)
 
-* `dev_seed.py` fills the SQLite database with demo users and fake reviews so
-  the UI can be exercised before Google approves API access. Demo logins are
-  listed at the top of that file. Delete `review_manager.db` to start clean.
-* The Claude desktop preview server is blocked by macOS privacy controls from
-  reading this Desktop folder (same issue as the launchd trackers). Start the
-  app from your own Terminal instead:
-  ```bash
-  cd "~/Desktop/Snowflake & Claude/review_manager" && .venv/bin/python cli.py web --reload
-  ```
-
-## 9. Read-only API (Teams Portal)
-
-Create a key under Admin → API keys (shown once). Every call takes
-`X-API-Key: <key>` (or `Authorization: Bearer <key>`), and the same filters:
+Create a key under Admin → API keys (shown once, on the page that creates it).
+Every call takes `X-API-Key: <key>` (or `Authorization: Bearer <key>`); a key in
+the URL (`?key=`) is refused with a 400, because URLs end up in logs. Every
+endpoint takes the same filters:
 `range` (today, yesterday, last7, last30, this_week, last_week, this_month,
 last_month, this_quarter, last_quarter, ytd, last12m, or `custom` with
 `start`/`end`), `brand`, `location_id`, `group_id` (all repeatable).
@@ -399,7 +395,7 @@ Browser calls are allowed from the origins in `API_CORS_ORIGINS` (default
 re-create to rotate. Errors come back as JSON with `status` 401 (no key) or 403
 (revoked/unknown).
 
-## 10. Accounts, passwords and sign-in
+## 11. Accounts, passwords and sign-in
 
 Admin → Users creates an account. The new person gets a **welcome email** with a
 link to set their own password (valid 48 hours, works once); when SMTP is not
@@ -411,10 +407,12 @@ from the Users table. Links are signed with `SECRET_KEY` and carry a fragment of
 the current password hash, so a used or superseded link stops working.
 `python cli.py create-user --email … --name … --invite` does the same from the CLI.
 
-## 11. Sessions and login
+## 12. Sessions and login
 
 Sessions expire after `SESSION_HOURS` (default 12) without activity and are
-renewed while the app is in use. Password login is throttled over a 15-minute
+renewed while the app is in use, up to `SESSION_MAX_DAYS` (default 7) after
+signing in, when everyone signs in again. Every form post must come from the
+app's own pages: a request whose `Origin`/`Referer` is another site is refused. Password login is throttled over a 15-minute
 window: `LOGIN_MAX_ATTEMPTS` (default 5) failures for one email from one address,
 four times that from one address across all emails, and four times that for one
 email across all addresses. So a stranger's few bad guesses do not lock the real
@@ -429,3 +427,39 @@ retried on each worker tick (up to 6 tries) while the others stay sent, a
 `send-report --to` test send never counts as the day's report, and if the
 worker was down from report time until after midnight, the missed day's report
 goes out late the next morning, once.
+
+## 13. Backups and health checks
+
+Everything the team creates (replies, notes, the activity log, templates, users,
+API key hashes, recipients, the employee roster) lives only in the database.
+Reviews could be re-pulled from Google; who replied, when and why could not.
+
+* **On Render Postgres**, paid instances include automated backups; check the
+  database's *Recovery* tab for the retention on your plan and do one test
+  restore after launch.
+* **Portable copy:** `python cli.py backup` writes the whole database to
+  `backups/review-manager-YYYYMMDD-HHMM.json.gz` (works on SQLite and Postgres).
+  `python cli.py restore <file> --yes` loads one into an *empty* database, so a
+  production copy can be opened on a laptop. Run it weekly from a machine that
+  can reach the database, or as a Render cron job, and keep the files somewhere
+  other than Render.
+* **SQLite with two processes** (web + worker on one machine) runs in WAL mode
+  with a 30-second busy timeout, and the sync commits every 50 reviews, so the
+  two rarely wait on each other. For anything beyond one small server, use
+  Postgres.
+* **Health:** `/health` answers 200 whenever the app and database are up (Render
+  restarts the web service when it fails, so a stalled worker must not fail it).
+  `/health/sync` answers 503 when syncing is overdue or a listing is failing:
+  point an uptime monitor at that one.
+
+## Local notes (this Mac)
+
+* `dev_seed.py` fills the SQLite database with demo users and fake reviews so
+  the UI can be exercised before Google approves API access. Demo logins are
+  listed at the top of that file. Delete `review_manager.db` to start clean.
+* The Claude desktop preview server is blocked by macOS privacy controls from
+  reading this Desktop folder (same issue as the launchd trackers). Start the
+  app from your own Terminal instead:
+  ```bash
+  cd "~/Desktop/Snowflake & Claude/review_manager" && .venv/bin/python cli.py web --reload
+  ```

@@ -7,3 +7,6 @@ google_token.json
 *.db
 .pytest_cache/
 .DS_Store
+backups/
+*.db-wal
+*.db-shm

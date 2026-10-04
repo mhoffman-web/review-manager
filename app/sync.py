@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from .config import settings
 from .events import record
@@ -226,7 +226,8 @@ def sync_link(
             run.reviews_seen += 1
             seen_ids.add(nr.external_id)
             review = session.execute(
-                select(Review).where(Review.source == link.source, Review.external_id == nr.external_id)
+                select(Review).options(undefer(Review.raw_json))
+                .where(Review.source == link.source, Review.external_id == nr.external_id)
             ).scalar_one_or_none()
             if run.reviews_seen % COMMIT_EVERY == 0:
                 session.commit()

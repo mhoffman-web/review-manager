@@ -221,3 +221,24 @@ def test_validation_gaps_and_error_pages(monkeypatch):
     fresh = auth.make_session_cookie(admin)
     assert auth.read_session(fresh)[0] == admin.id
     s.close()
+
+
+def test_cross_site_posts_are_refused():
+    from fastapi.testclient import TestClient
+    from app import auth
+    from app.db import SessionLocal, engine, init_db
+    from app.models import Base, User
+    from app.web import app
+    Base.metadata.drop_all(engine); init_db()
+    s = SessionLocal(); s.add(User(email="admin@x.com", name="A", password_hash=auth.hash_password("dev-password-admin-2026"), role="admin")); s.commit(); s.close()
+    c = TestClient(app)
+    c.post("/login", data={"email": "admin@x.com", "password": "dev-password-admin-2026"})
+    for hdrs in ({"Origin": "https://evil.example"}, {"Origin": "https://reviews.evil.testserver"}, {"Origin": "null"},
+                 {"Referer": "https://evil.example/page"}):
+        r = c.post("/admin/api", data={"name": "x"}, headers=hdrs)
+        assert r.status_code == 403, hdrs
+    ok = c.post("/admin/api", data={"name": "x"}, headers={"Origin": "http://testserver"})
+    assert ok.status_code == 200 and "New key created" in ok.text
+    assert c.post("/admin/api", data={"name": "y"}, headers={"Referer": "http://testserver/admin/api"}).status_code == 200
+    # health: liveness always 200; sync health speaks in status codes
+    assert c.get("/health").status_code == 200 and c.get("/health/sync").status_code in (200, 503)

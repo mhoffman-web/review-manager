@@ -3,7 +3,7 @@ No network, in-memory SQLite."""
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db import SessionLocal, engine, init_db
 from app.models import Base, Location, ReplyTemplate, Review, ReviewSourceLink, User
@@ -491,3 +491,46 @@ def test_alert_gaps_legacy_recipients_and_groups(db):
     assert "already+exists" in r.headers["location"]
     s.expire_all()
     assert [l.id for l in s.get(SiteGroup, g.id).locations] == [link.location.id]
+
+
+def test_window_loaded_once_per_request_and_payload_deferred(db):
+    from sqlalchemy import event
+    from app.daterange import resolve_range
+    from app.reports import build_trends, rating_distribution, window_report
+    s, link = db
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("a", 5, "great", 1), nr("b", 1, "bad", 2)])); s.commit()
+    s.expunge_all()
+    statements = []
+    listener = lambda conn, cur, stmt, *a: statements.append(stmt)
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        dr = resolve_range("last30")
+        window_report(s, dr); build_trends(s, dr); rating_distribution(s, dr)
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)
+    review_selects = [x for x in statements if x.lstrip().upper().startswith("SELECT") and "FROM reviews" in x and "reviews.created_at_source >=" in x]
+    assert len(review_selects) == 1, len(review_selects)
+    assert all("raw_json" not in x for x in review_selects)
+
+
+def test_backup_round_trip(db, tmp_path):
+    from app import backup
+    from app.models import ReviewEvent, SyncRun
+    s, link = db
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("a", 5, "great", 1, reply="thanks"), nr("b", 1, "bad", 2)])); s.commit()
+    before = {t.name: s.execute(select(func.count()).select_from(t)).scalar() for t in Base.metadata.sorted_tables}
+    path = tmp_path / "b.json.gz"
+    counts = backup.dump(path)
+    assert counts["reviews"] == 2 and counts["users"] == 1
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        backup.restore(path)                       # never into a database that has data
+    s.close()
+    Base.metadata.drop_all(engine)
+    backup.restore(path)
+    s2 = SessionLocal()
+    after = {t.name: s2.execute(select(func.count()).select_from(t)).scalar() for t in Base.metadata.sorted_tables}
+    assert after == before
+    r = s2.execute(select(Review).where(Review.external_id == "a")).scalar_one()
+    assert r.owner_reply_text == "thanks" and isinstance(r.created_at_source, datetime)
+    s2.close()

@@ -114,7 +114,9 @@ class Review(Base):
     sentiment: Mapped[Optional[str]] = mapped_column(String(20))
     internal_note: Mapped[Optional[str]] = mapped_column(Text)
 
-    raw_json: Mapped[Optional[str]] = mapped_column(Text)
+    # The platform's full payload: written by the sync, never read by pages, so it is not loaded
+    # unless asked for (a report over 20K reviews was dragging every payload into memory).
+    raw_json: Mapped[Optional[str]] = mapped_column(Text, deferred=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -197,10 +197,30 @@ def cmd_web(a):
     uvicorn.run("app.web:app", host=a.host, port=a.port, reload=a.reload)
 
 
+def cmd_backup(a):
+    from datetime import datetime
+    from pathlib import Path
+    from app.backup import dump
+    out = Path(a.out or f"backups/review-manager-{datetime.now():%Y%m%d-%H%M}.json.gz")
+    counts = dump(out)
+    print(f"wrote {out} ({out.stat().st_size // 1024} KB): " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+
+
+def cmd_restore(a):
+    from pathlib import Path
+    from app.backup import restore
+    if not a.yes:
+        raise SystemExit("restore writes into the configured DATABASE_URL; re-run with --yes to confirm")
+    counts = restore(Path(a.file))
+    print("restored: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init-db").set_defaults(fn=cmd_init_db)
+    sp = sub.add_parser("backup", help="write the whole database to a gzipped JSON file"); sp.add_argument("--out"); sp.set_defaults(fn=cmd_backup)
+    sp = sub.add_parser("restore", help="load a backup into an EMPTY database"); sp.add_argument("file"); sp.add_argument("--yes", action="store_true"); sp.set_defaults(fn=cmd_restore)
     sp = sub.add_parser("seed-locations"); sp.add_argument("--csv"); sp.set_defaults(fn=cmd_seed_locations)
     sp = sub.add_parser("create-user"); sp.add_argument("--email", required=True); sp.add_argument("--name", required=True)
     sp.add_argument("--admin", action="store_true"); sp.add_argument("--password", help="omit to be prompted"); sp.add_argument("--invite", action="store_true", help="no password: email (or print) a set-password link instead"); sp.set_defaults(fn=cmd_create_user)

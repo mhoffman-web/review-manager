@@ -25,7 +25,7 @@ envVarGroups:
       - key: TRUSTED_PROXY_HOPS
         value: "1"
       - key: LISTING_EXCLUDE_PATTERNS
-        value: "wash n' roll,wash n roll"
+        value: "wash n' roll,wash n roll,wash n’ roll"
       # Fill these in the dashboard (sync: false = Render asks for the value, never stores it in git)
       - key: APP_BASE_URL
         sync: false
