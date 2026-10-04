@@ -273,8 +273,8 @@ Go-live steps:
 1. Render dashboard → **New → Blueprint** → pick this repo → set the Blueprint
    file path to `render.production.yaml` → Apply. Render asks for every secret
    once, on the web service. Fill `APP_BASE_URL` with the web address Render
-   will use (`https://review-manager.onrender.com` unless that name is taken,
-   then copy the real one after the first deploy) and leave the rest blank until
+   will use (the production instance is `https://review-manager-yp9a.onrender.com`;
+   a new one gets its own suffix, so copy it from the service page) and leave the rest blank until
    you have them. The worker reads the same values from the web service.
 2. Open the web service → **Shell** and run once:
    ```bash
@@ -284,9 +284,10 @@ Go-live steps:
    Without SMTP the second command prints the set-password link; open it, set a
    password, sign in.
 3. As each piece arrives, paste it into the web service's **Environment** tab
-   (Render redeploys both services): SMTP user/password/from, Microsoft
-   client id/secret/tenant ids, `GOOGLE_TOKEN_JSON`, `FACEBOOK_ACCESS_TOKEN`,
-   `ANTHROPIC_API_KEY`.
+   (Render redeploys it): SMTP user/password/from, Microsoft client
+   id/secret/tenant ids, `GOOGLE_TOKEN_JSON`, `FACEBOOK_ACCESS_TOKEN`,
+   `ANTHROPIC_API_KEY`. Paste `GOOGLE_TOKEN_JSON`, `SMTP_PASSWORD`,
+   `FACEBOOK_ACCESS_TOKEN` and `ANTHROPIC_API_KEY` on the worker too.
 4. When Google approves: Admin → Sites & listings → **Discover**, map any
    unmapped listing, then run a full sync from the Listings page.
 5. Point an uptime monitor at `/health/sync`, add the custom domain under the

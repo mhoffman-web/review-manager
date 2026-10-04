@@ -7,10 +7,9 @@
 # free web services sleep, and free Postgres expires. Paid Postgres includes
 # point-in-time recovery. Check render.com/pricing for current prices.
 #
-# Secrets are entered ONCE, on the web service (Render prompts for every `sync: false`
-# value when the Blueprint is first created; leave any you do not have yet blank and add
-# them later under the service's Environment tab). The worker reads the same values from
-# the web service, so nothing is typed twice.
+# Secrets live on the web service. The worker reads SECRET_KEY, APP_BASE_URL and the SMTP
+# addresses from it; the four secrets that arrive later (Google token, SMTP password,
+# Facebook token, Anthropic key) are pasted on both services' Environment tabs.
 
 databases:
   - name: review-manager-db
@@ -101,20 +100,24 @@ services:
         fromDatabase:
           name: review-manager-db
           property: connectionString
-      # Same values as the web service, read from it.
+      # Read from the web service. Only values that always exist there can be referenced:
+      # Render does not create a `sync: false` variable that was left blank, and a reference
+      # to a missing variable fails the whole sync.
       - key: SECRET_KEY
         fromService: {type: web, name: review-manager, envVarKey: SECRET_KEY}
       - key: APP_BASE_URL
         fromService: {type: web, name: review-manager, envVarKey: APP_BASE_URL}
-      - key: GOOGLE_TOKEN_JSON
-        fromService: {type: web, name: review-manager, envVarKey: GOOGLE_TOKEN_JSON}
       - key: SMTP_USER
         fromService: {type: web, name: review-manager, envVarKey: SMTP_USER}
-      - key: SMTP_PASSWORD
-        fromService: {type: web, name: review-manager, envVarKey: SMTP_PASSWORD}
       - key: SMTP_FROM
         fromService: {type: web, name: review-manager, envVarKey: SMTP_FROM}
+      # Secrets the worker needs too. Paste each on BOTH services when it arrives
+      # (web: Environment tab; worker: Environment tab).
+      - key: GOOGLE_TOKEN_JSON
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
       - key: FACEBOOK_ACCESS_TOKEN
-        fromService: {type: web, name: review-manager, envVarKey: FACEBOOK_ACCESS_TOKEN}
+        sync: false
       - key: ANTHROPIC_API_KEY
-        fromService: {type: web, name: review-manager, envVarKey: ANTHROPIC_API_KEY}
+        sync: false
