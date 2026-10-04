@@ -237,3 +237,14 @@ def test_against_real_postgres(tmp_path):
         backup.restore(path)
     finally:
         dbmod.engine = monkey_engine; backup.engine = monkey_engine
+
+
+def test_init_db_never_prints_the_database_password(monkeypatch, capsys):
+    import cli
+    from app.config import settings as st
+    monkeypatch.setattr(st, "database_url", "postgresql+psycopg://user:s3cret-pw@db.example:5432/rm")
+    monkeypatch.setattr(cli, "init_db", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["cli.py", "init-db"])
+    cli.main()
+    out = capsys.readouterr().out
+    assert "s3cret-pw" not in out and "db.example" in out

@@ -41,7 +41,9 @@ def cmd_init_db(_a):
     from app.config import settings
     settings.check_or_exit("init-db")
     init_db()
-    print(f"tables ready in {settings.database_url}")
+    from sqlalchemy.engine import make_url
+    # Never print the password: this line lands in the hosting provider's deploy logs.
+    print(f"tables ready in {make_url(settings.database_url).render_as_string(hide_password=True)}")
 
 
 def cmd_seed_locations(a):
