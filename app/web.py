@@ -35,6 +35,8 @@ from .sources import get_adapter
 from .sync import sync_all
 from .text_intel import THEMES as INTEL_THEMES, apply_intel, suggest_templates
 
+from .logging_setup import setup_logging  # noqa: E402
+setup_logging()
 log = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 
@@ -159,7 +161,8 @@ async def _renew_session(request: Request, call_next):
     response = await call_next(request)
     uid = getattr(request.state, "renew_session_uid", None)
     if uid:
-        response.set_cookie(auth.COOKIE_NAME, auth._serializer.dumps({"uid": uid}), httponly=True, samesite="lax",
+        cookie = auth.make_session_cookie(uid, getattr(request.state, "renew_session_iat", None))
+        response.set_cookie(auth.COOKIE_NAME, cookie, httponly=True, samesite="lax",
                             max_age=auth.SESSION_MAX_AGE, secure=settings.app_base_url.startswith("https"))
     return response
 
@@ -169,8 +172,35 @@ async def _auth_redirect(request: Request, exc: HTTPException):
     if request.url.path.startswith("/api/") or "application/json" in (request.headers.get("accept") or ""):
         return JSONResponse({"error": exc.detail, "status": exc.status_code}, status_code=exc.status_code)
     if exc.status_code == status.HTTP_401_UNAUTHORIZED:
-        return RedirectResponse(url=f"/login?next={request.url.path}", status_code=303)
-    return HTMLResponse(f"<h1>{exc.status_code}</h1><p>{exc.detail}</p>", status_code=exc.status_code)
+        return RedirectResponse(url="/login?" + urlencode({"next": request.url.path}), status_code=303)
+    return _error_page(request, exc.status_code, str(exc.detail or ""))
+
+
+_ERROR_TITLES = {403: "Not allowed", 404: "Not found", 400: "That did not work", 405: "Not allowed", 422: "Something was missing"}
+
+
+def _error_page(request: Request, code: int, detail: str) -> HTMLResponse:
+    """Errors keep the normal page frame (nav, theme) and a way back. Detail is escaped by Jinja."""
+    from .db import SessionLocal
+    with SessionLocal() as db:
+        uid, _ = auth.read_session(request.cookies.get(auth.COOKIE_NAME))
+        user = db.get(User, uid) if uid else None
+        resp = _render(request, "error.html", user if (user and user.active) else None, db, code=code,
+                       title=_ERROR_TITLES.get(code, "Something went wrong"), detail=detail)
+    resp.status_code = code
+    return resp
+
+
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    """A missing or malformed form field: a readable page instead of raw JSON."""
+    if request.url.path.startswith("/api/") or "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse({"error": "Invalid request", "detail": exc.errors(), "status": 422}, status_code=422)
+    fields = sorted({str(e.get("loc", ["", "?"])[-1]) for e in exc.errors()})
+    return _error_page(request, 422, "Please fill in: " + ", ".join(fields) if fields else "The form was incomplete.")
 
 
 def _attention_cond(overdue_cut: datetime):
@@ -440,6 +470,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
           rating: List[str] = Query([]), q: str = "", range: str = "", start: str = "", end: str = "", sv: int = 0, page: int = 1,
           sort: str = "", dir: str = "asc"):
     per_page = 50
+    page = max(1, page)
     brands_f, loc_f, grp_f, rat_f = _strs(brand), _ints(location_id), _ints(group_id), _ints(rating)
     saved_views = db.execute(select(SavedView).where(or_(SavedView.is_shared.is_(True), SavedView.owner_id == user.id))
                              .order_by(SavedView.sort_order, SavedView.name)).scalars().all()
@@ -447,7 +478,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     if sv:
         active_view = next((v for v in saved_views if v.id == sv), None)
         if active_view:
-            p = active_view.params()
+            p = _clean_view_params(active_view.params())
             view = p.get("view", view); q = p.get("q", "")
             brands_f = _strs(p.get("brands") or ([p["brand"]] if p.get("brand") else []))
             loc_f = _ints(p.get("location_ids") or ([p["location_id"]] if p.get("location_id") else []))
@@ -499,7 +530,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     ctx = qs + "&" + urlencode({"sort": sort, "dir": dir, "sv": active_view.id if active_view else 0})
     # Inline composer: top template suggestions per open review on this page.
     tpl_rows = db.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True)).order_by(ReplyTemplate.sort_order, ReplyTemplate.name)).scalars().all()
-    first = user.name.split()[0] if user.name else ""
+    first = user.first_name
     inline = {}
     for r in rows:
         if r.has_owner_reply or r.is_archived or r.is_deleted:
@@ -520,18 +551,45 @@ def create_group(request: Request, user: User = Depends(auth.current_user), db: 
     name = name.strip()[:80]
     if not name or not location_ids:
         return RedirectResponse(url=_safe_path(back), status_code=303)
-    g = db.execute(select(SiteGroup).where(SiteGroup.name == name)).scalar_one_or_none() or SiteGroup(name=name)
+    # Groups are shared: this quick-create never replaces an existing group's sites
+    # (admins edit groups under Admin -> Site groups).
+    if db.execute(select(SiteGroup.id).where(func.lower(SiteGroup.name) == name.lower())).first():
+        return RedirectResponse(url=_with_query(_safe_path(back), urlencode({"msg": f"A group called {name} already exists. Pick another name."})), status_code=303)
+    g = SiteGroup(name=name)
     db.add(g)
     g.locations = db.execute(select(Location).where(Location.id.in_(location_ids))).scalars().all()
     db.commit()
     return RedirectResponse(url=_with_query(_safe_path(back), f"group_id={g.id}"), status_code=303)
 
 
+_VIEW_LIST_KEYS = ("brands", "location_ids", "group_ids", "ratings")
+_VIEW_STR_KEYS = ("view", "q", "range", "start", "end", "brand", "location_id", "group_id", "rating", "days")
+
+
+def _clean_view_params(p) -> dict:
+    """Saved-view JSON is shared between people: keep only known keys with sane types so one
+    bad view can never break the inbox for everyone who opens it."""
+    if not isinstance(p, dict):
+        return {}
+    out: dict = {}
+    for k in _VIEW_LIST_KEYS:
+        v = p.get(k)
+        if isinstance(v, list):
+            out[k] = [str(x)[:120] for x in v if isinstance(x, (str, int))][:100]
+    for k in _VIEW_STR_KEYS:
+        v = p.get(k)
+        if isinstance(v, (str, int)) and not isinstance(v, bool):
+            out[k] = str(v)[:200]
+    if "days" in out and not out["days"].isdigit():
+        del out["days"]
+    return out
+
+
 @app.post("/views")
 def save_view(user: User = Depends(auth.current_user), db: Session = Depends(get_db), name: str = Form(...),
               is_shared: int = Form(0), params: str = Form("{}")):
     try:
-        p = json.loads(params)
+        p = _clean_view_params(json.loads(params))
     except ValueError:
         p = {}
     v = SavedView(name=name.strip()[:80] or "Untitled", owner_id=user.id, is_shared=bool(is_shared), params_json=json.dumps(p))
@@ -637,7 +695,7 @@ def _timeline(r: Review) -> List[Dict]:
 def _template_suggestions(db: Session, r: Review, user: User) -> List[Dict]:
     tpls = db.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True)).order_by(ReplyTemplate.sort_order, ReplyTemplate.name)).scalars().all()
     ranked = suggest_templates(r, tpls, r.mention_names)
-    first = user.name.split()[0] if user.name else ""
+    first = user.first_name
     out = []
     for i, (t, score) in enumerate(ranked):
         out.append({"id": t.id, "name": t.name, "body": t.render(r, first), "score": score, "suggested": i < 3 and score > 0,
@@ -729,7 +787,7 @@ def post_reply(review_id: int, request: Request, text: str = Form(...), go_next:
         msg, ok = "Posting failed. See the error below.", False
     db.commit()
     if wants_json:
-        return JSONResponse({"ok": ok, "msg": msg, "reply": _reply_cell(r, user.name.split()[0]) if ok else None,
+        return JSONResponse({"ok": ok, "msg": msg, "reply": _reply_cell(r, user.first_name) if ok else None,
                              "next": nxt if ok else None, "error": row.error if not ok else None}, status_code=200 if ok else 502)
     if ok and nxt:
         return RedirectResponse(url=f"/reviews/{nxt}?" + urlencode({"msg": f"{msg} Here is the next one.", "ctx": ctx}), status_code=303)
@@ -759,7 +817,9 @@ def delete_reply(review_id: int, user: User = Depends(auth.current_user), db: Se
 @app.post("/reviews/{review_id}/note")
 def save_note(review_id: int, note: str = Form(""), category: str = Form(""), user: User = Depends(auth.current_user), db: Session = Depends(get_db)):
     r = _get_review(db, review_id)
-    new_note, new_cat = note.strip() or None, category.strip() or None
+    new_note, new_cat = note.strip()[:5000] or None, category.strip() or None
+    if new_cat and new_cat not in THEMES and new_cat != r.category:
+        raise HTTPException(400, "Unknown category")
     if new_cat != r.category:
         record(db, r, "category_changed", actor_id=user.id, **{"from": r.category, "to": new_cat})
         r.category, r.category_source = new_cat, ("manual" if new_cat else None)
@@ -851,7 +911,7 @@ def draft(review_id: int, user: User = Depends(auth.current_user), db: Session =
     rules = db.execute(select(AiRule).where(AiRule.active.is_(True)).order_by(AiRule.sort_order)).scalars().all()
     examples = [t for t, _ in suggest_templates(r, db.execute(select(ReplyTemplate).where(ReplyTemplate.active.is_(True))).scalars().all(), r.mention_names)][:5]
     try:
-        text = draft_reply(r, rules, examples, user.name.split()[0] if user.name else "")
+        text = draft_reply(r, rules, examples, user.first_name)
         return JSONResponse({"ok": True, "text": text})
     except AiUnavailable as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
@@ -1174,12 +1234,15 @@ def admin_users(request: Request, user: User = Depends(auth.admin_user), db: Ses
 
 @app.post("/admin/users")
 def save_user(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), email: str = Form(...),
-              name: str = Form(...), password: str = Form(""), role: str = Form("agent")):
+              name: str = Form(""), password: str = Form(""), role: str = Form("agent")):
     """Create or update a user. A new user gets a welcome email with a set-password link; when
     email is not configured the link is shown to the admin to pass on."""
     from .account_mail import send_welcome
     email = email.strip().lower()
+    if "@" not in email or len(email) > 200:
+        return RedirectResponse(url=f"/admin/users?{urlencode({'msg': 'Enter a valid email address.'})}", status_code=303)
     role = role if role in ("agent", "admin") else "agent"
+    name = name.strip()[:120] or email.split("@")[0]
     u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if u is None:
         if password and auth.password_problem(password):
@@ -1427,19 +1490,11 @@ def ai_classify_window(background: BackgroundTasks, user: User = Depends(auth.ad
     dr = _dr(range, start, end)
 
     def _run():
-        from .ai import AiUnavailable, classify_negative
+        from .sync import classify_window
         with session_scope() as s:
             q = select(Review).where(Review.is_deleted.is_(False), Review.rating <= settings.negative_rating_max,
                                      Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
-            for r in s.execute(q).scalars().all():
-                if not (r.text or "").strip():
-                    r.category = "No Content"; continue
-                if r.category and not force and r.category != "Unknown":
-                    continue
-                try:
-                    r.category = classify_negative(r, THEMES)
-                except AiUnavailable:
-                    break
+            log.info("AI re-group of %s: %s", dr.label, classify_window(s, s.execute(q).scalars().all(), force=bool(force)))
     background.add_task(_run)
     return RedirectResponse(url=_safe_path(back, "/reports"), status_code=303)
 
@@ -1525,7 +1580,13 @@ def add_listing(user: User = Depends(auth.admin_user), db: Session = Depends(get
                 external_account_id: str = Form(""), display_name: str = Form(""), listing_url: str = Form(""), location_id: int = Form(0)):
     """Record a listing by id when discovery cannot see it (e.g. a profile owned by another account)."""
     from . import discovery
+    from .sources import ADAPTERS
+    source = source.strip().lower()
+    if source not in ADAPTERS:
+        raise HTTPException(400, f"Unknown platform '{source[:30]}'. Choose one of: {', '.join(sorted(ADAPTERS))}.")
     ext = external_location_id.strip().split("/")[-1]
+    if not ext:
+        raise HTTPException(400, "The listing id is empty.")
     loc = db.get(Location, location_id) if location_id else None
     link = discovery.upsert_link(db, source.strip().lower(), ext, display_name.strip() or ext, external_account_id=external_account_id.strip().split("/")[-1] or None,
                                  listing_url=listing_url.strip() or None, location=loc, auto_map=False)

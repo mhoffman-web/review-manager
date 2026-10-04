@@ -87,6 +87,9 @@ class Review(Base):
         UniqueConstraint("source", "external_id", name="uq_review_external"),
         Index("ix_reviews_created", "created_at_source"),
         Index("ix_reviews_unanswered", "has_owner_reply", "is_deleted"),
+        Index("ix_reviews_link", "source_link_id"),        # daily full pull, per-site pages
+        Index("ix_reviews_removed", "removed_at"),
+        Index("ix_reviews_alerted", "alerted_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -204,6 +207,7 @@ class Review(Base):
 class Response(Base):
     """A reply we wrote. One review can have several rows (edits, failures)."""
     __tablename__ = "responses"
+    __table_args__ = (Index("ix_responses_review", "review_id"), Index("ix_responses_created", "created_at"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     review_id: Mapped[int] = mapped_column(ForeignKey("reviews.id"))
@@ -295,6 +299,12 @@ class User(Base):
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    @property
+    def first_name(self) -> str:
+        """First word of the name, or the email's local part when the name is blank."""
+        parts = (self.name or "").split()
+        return parts[0] if parts else (self.email or "").split("@")[0]
 
 
 class ReportRecipient(Base):
@@ -494,3 +504,25 @@ class ApiKey(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_by: Mapped[Optional["User"]] = relationship()
+
+
+# ---- every String(n) column is truncated to n on write. SQLite ignores the length, Postgres
+# rejects the row (a 500), so a long template name or city must never reach the database whole.
+from sqlalchemy import String as _String, event as _event
+from sqlalchemy.orm import Session as _Session
+
+
+@_event.listens_for(_Session, "before_flush")
+def _truncate_strings(session, _ctx, _instances):
+    for obj in list(session.new) + list(session.dirty):
+        table = getattr(obj, "__table__", None)
+        if table is None:
+            continue
+        for col in table.columns:
+            n = getattr(col.type, "length", None)
+            if not n or not isinstance(col.type, _String):
+                continue
+            key = col.key
+            val = obj.__dict__.get(key)
+            if isinstance(val, str) and len(val) > n:
+                setattr(obj, key, val[:n])

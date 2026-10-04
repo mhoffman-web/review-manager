@@ -106,10 +106,17 @@ def test_employee_report_and_monthly(db):
     t = build_trends(s, resolve_range("last30"))
     assert t["granularity"] == "day" and sum(t["counts"]["ICON"]) == 5 and len(t["labels"]) == 30
     assert build_trends(s, resolve_range("last_quarter"))["granularity"] == "week"
-    # custom window containing only the two newest reviews
-    from datetime import date
-    cutoff = (datetime.utcnow() - timedelta(days=3.5)).date().isoformat()
-    w2 = window_report(s, resolve_range("custom", cutoff, date.today().isoformat()))
+    # a custom window is whole LOCAL days: fixed dates around both edges, never "now"-relative
+    from zoneinfo import ZoneInfo
+    from app.config import settings
+    tz, utc = ZoneInfo(settings.timezone), ZoneInfo("UTC")
+    for ext, local in [("e1", datetime(2026, 6, 9, 23, 30)), ("e2", datetime(2026, 6, 10, 0, 30)),
+                       ("e3", datetime(2026, 6, 12, 23, 30)), ("e4", datetime(2026, 6, 13, 0, 30))]:
+        t = local.replace(tzinfo=tz).astimezone(utc).replace(tzinfo=None)
+        s.add(Review(source_link_id=link.id, source="google", external_id=ext, rating=4, text="edge",
+                     created_at_source=t, updated_at_source=t, raw_json="{}"))
+    s.commit()
+    w2 = window_report(s, resolve_range("custom", "2026-06-10", "2026-06-12"))
     assert w2.count == 2
 
 
@@ -387,3 +394,43 @@ def test_exports_never_contain_live_formulas(db):
     hyper = [cl for cl in cells if isinstance(cl.value, str) and cl.value.startswith("=HYPERLINK")]
     assert hyper and all(cl.data_type == "s" for cl in hyper)
     assert not any(cl.data_type == "f" for cl in cells)
+
+
+def test_bulk_classify_respects_manual_themes(db, monkeypatch):
+    from app import ai
+    from app.sync import classify_window
+    s, loc, link = db
+    manual = mk(s, link, "c1", 1, "the dryer left water everywhere"); manual.category, manual.category_source = "Customer Service", "manual"
+    auto = mk(s, link, "c2", 2, "line took forty minutes")
+    empty = mk(s, link, "c3", 1, None)
+    s.commit()
+    monkeypatch.setattr(ai, "classify_negative", lambda r, cats, examples=None: "Long Line")
+    out = classify_window(s, [manual, auto, empty], force=True)
+    assert out == {"classified": 2, "kept": 0, "manual": 1, "failed": 0}
+    assert manual.category == "Customer Service" and manual.category_source == "manual"
+    assert (auto.category, auto.category_source) == ("Long Line", "ai")
+    assert (empty.category, empty.category_source) == ("No Content", "keyword")
+
+
+def test_ai_cut_off_answers_are_unavailable_not_unknown(db, monkeypatch):
+    import types, sys
+    from app import ai
+    s, loc, link = db
+    r = mk(s, link, "t1", 1, "awful"); s.commit()
+    calls = {}
+
+    class Msgs:
+        def create(self, **kw):
+            calls.update(kw)
+            return types.SimpleNamespace(stop_reason="max_tokens", content=[])
+    fake = types.SimpleNamespace(Anthropic=lambda api_key: types.SimpleNamespace(messages=Msgs()),
+                                 RateLimitError=type("R", (Exception,), {}), APIStatusError=type("S", (Exception,), {}),
+                                 APIConnectionError=type("C", (Exception,), {}))
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    monkeypatch.setattr(ai.settings, "anthropic_api_key", "test")
+    with pytest.raises(ai.AiUnavailable):
+        ai.classify_negative(r, ["Long Line", "Unknown"])
+    assert calls["max_tokens"] >= 1000 and calls["output_config"] == {"effort": "low"}
+    with pytest.raises(ai.AiUnavailable):
+        ai.draft_reply(r)
+    assert calls["max_tokens"] >= 2000

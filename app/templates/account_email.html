@@ -4,7 +4,7 @@
   <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#009ace">Review Manager</p>
   {% if kind == 'welcome' %}
   <h2 style="margin:0 0 10px">Your account is ready</h2>
-  <p>Hi {{ user.name.split()[0] if user.name else 'there' }}, {{ by or 'an administrator' }} set up a Review Manager account for <strong>{{ user.email }}</strong>{% if user.role == 'admin' %} with admin access{% endif %}. It is where the team reads and answers Google reviews for every location.</p>
+  <p>Hi {{ user.first_name }}, {{ by or 'an administrator' }} set up a Review Manager account for <strong>{{ user.email }}</strong>{% if user.role == 'admin' %} with admin access{% endif %}. It is where the team reads and answers Google reviews for every location.</p>
   <p style="margin:18px 0"><a href="{{ link }}" style="display:inline-block;background:#009ace;color:#fff;text-decoration:none;font-weight:700;padding:11px 18px;border-radius:8px">Set your password</a></p>
   <p style="color:#6b7280;font-size:13px">The link works for 48 hours and only once. After that, use “Forgot password?” on the sign-in page.</p>
   {% if sso %}<p style="color:#6b7280;font-size:13px">Have a {{ domains|join(', ') }} Microsoft account? You can skip the password and use <a href="{{ settings.app_base_url }}/login" style="color:#1d4ed8">Sign in with Microsoft</a>.</p>{% endif %}

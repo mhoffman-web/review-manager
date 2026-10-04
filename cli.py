@@ -32,7 +32,8 @@ from app.config import settings  # noqa: E402
 from app.db import init_db, session_scope  # noqa: E402
 from app.models import Location, ReportRecipient, ReviewSourceLink, User  # noqa: E402
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+from app.logging_setup import setup_logging  # noqa: E402
+setup_logging()
 log = logging.getLogger("cli")
 
 
@@ -173,30 +174,15 @@ def cmd_send_report(a):
 
 def cmd_classify(a):
     """Group negative reviews in a window into the workbook categories with Claude."""
-    from app.ai import AiUnavailable, classify_negative
     from app.daterange import resolve_range
     from app.models import Review
-    from app.text_intel import THEMES
+    from app.sync import classify_window
     dr = resolve_range(a.range, a.start or "", a.end or "")
-    done = skipped = failed = 0
     with session_scope() as s:
         q = select(Review).where(Review.is_deleted.is_(False), Review.rating <= settings.negative_rating_max,
                                  Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
-        for r in s.execute(q).scalars().all():
-            if not (r.text or "").strip():
-                if r.category != "No Content":
-                    r.category = "No Content"; done += 1
-                continue
-            if r.category and not a.force and r.category not in ("Unknown", None):
-                skipped += 1; continue
-            try:
-                r.category = classify_negative(r, THEMES); done += 1
-            except AiUnavailable as exc:
-                failed += 1
-                log.warning("%s", exc)
-                if "not configured" in str(exc):
-                    break
-    print(f"{dr.label}: classified {done}, kept {skipped}, failed {failed}")
+        out = classify_window(s, s.execute(q).scalars().all(), force=a.force)
+    print(f"{dr.label}: classified {out['classified']}, kept {out['kept']}, set by hand {out['manual']}, failed {out['failed']}")
 
 
 def cmd_worker(_a):

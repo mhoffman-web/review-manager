@@ -66,6 +66,8 @@ class Settings:
     exclude_disputed: bool = _bool(os.getenv("EXCLUDE_DISPUTED"), True)
     # Signed-in sessions expire after this many hours without activity.
     session_hours: int = int(os.getenv("SESSION_HOURS", "12"))
+    # Hard cap on one sign-in, however actively it is used (the idle timeout above slides).
+    session_max_days: int = int(os.getenv("SESSION_MAX_DAYS", "7"))
     # Password login: this many failed attempts per email or address within 15 minutes locks it for 15 minutes.
     login_max_attempts: int = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
     # How many proxies sit in front of the app and append to X-Forwarded-For. Render runs one;

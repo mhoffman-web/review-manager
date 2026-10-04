@@ -10,7 +10,7 @@
 <td class="small">{% for tag in t.tag_list() %}<span class="pill small">{{ tag }}</span> {% endfor %}</td>
 <td class="small" style="white-space:pre-wrap;max-width:380px">{{ t.body }}</td>
 <td class="num">{{ t.usage_count or 0 }}</td>
-<td class="muted small" data-sort="{{ t.updated_at.isoformat() if t.updated_at else '' }}">{{ t.updated_by.name.split()[0] if t.updated_by else '' }} {{ t.updated_at|local('%b %-d') }}</td>
+<td class="muted small" data-sort="{{ t.updated_at.isoformat() if t.updated_at else '' }}">{{ t.updated_by.first_name if t.updated_by else '' }} {{ t.updated_at|local('%b %-d') }}</td>
 <td style="white-space:nowrap">{% if user.is_admin %}<a class="small" href="/admin/templates?edit={{ t.id }}">Edit</a> · <form method="post" action="/admin/templates/{{ t.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this template?')"><button class="ghost small">Delete</button></form>{% endif %}</td></tr>{% endfor %}
 </tbody></table></div>
 {% else %}<div class="card muted">No templates yet.</div>{% endfor %}

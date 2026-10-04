@@ -20,6 +20,9 @@ log = logging.getLogger(__name__)
 # Incremental syncs re-read this much history so late edits and clock skew
 # never cause a miss. Cheap: it is a page or two per location.
 INCREMENTAL_OVERLAP = timedelta(days=3)
+# Commit every N reviews during a pull. On SQLite this releases the write lock between
+# batches so the web app is never blocked for the length of a network pull.
+COMMIT_EVERY = 50
 
 
 def _apply(session: Session, review: Review, nr: NormalizedReview, now: datetime, is_new: bool = False) -> bool:
@@ -87,6 +90,36 @@ def _ai_classify(session: Session, review: Review) -> None:
         review.category_source = "ai"
     except Exception as exc:  # keyword category from apply_intel stays
         log.warning("AI classification skipped for review %s: %s", review.external_id, exc)
+
+
+def classify_window(session: Session, reviews, force: bool = False) -> Dict[str, int]:
+    """The one bulk path (CLI `classify` and the admin "re-group this window" button).
+    Same rules as the sync: a theme set by hand is never overwritten, every theme it sets
+    records where it came from, and a review with no text is "No Content"."""
+    from .ai import AiUnavailable, classify_negative
+    out = {"classified": 0, "kept": 0, "manual": 0, "failed": 0}
+    examples = _manual_examples(session)
+    for r in reviews:
+        if r.category_source == "manual":
+            out["manual"] += 1
+            continue
+        if not (r.text or "").strip():
+            if r.category != "No Content":
+                r.category, r.category_source = "No Content", "keyword"
+                out["classified"] += 1
+            continue
+        if r.category and r.category != "Unknown" and not force:
+            out["kept"] += 1
+            continue
+        try:
+            r.category, r.category_source = classify_negative(r, THEMES, examples=examples), "ai"
+            out["classified"] += 1
+        except AiUnavailable as exc:
+            out["failed"] += 1
+            log.warning("AI classification skipped for review %s: %s", r.external_id, exc)
+            if "not configured" in str(exc) or "Rate limited" in str(exc):
+                break
+    return out
 
 
 def _intel(session: Session, review: Review, roster) -> None:
@@ -171,8 +204,8 @@ def sync_link(
     link_id, name = link.id, link.display_name or link.external_location_id
     run = SyncRun(source_link_id=link.id, full=full)
     session.add(run)
-    session.flush()
-    started = run.started_at
+    session.commit()          # the "running" row is visible at once, and no lock is held during the pull
+    run_id, started = run.id, run.started_at
 
     since = None
     if not full and link.last_synced_at is not None:
@@ -195,6 +228,8 @@ def sync_link(
             review = session.execute(
                 select(Review).where(Review.source == link.source, Review.external_id == nr.external_id)
             ).scalar_one_or_none()
+            if run.reviews_seen % COMMIT_EVERY == 0:
+                session.commit()
             if review is None:
                 review = Review(source_link_id=link.id, source=link.source, external_id=nr.external_id,
                                 created_at_source=nr.created_at, updated_at_source=nr.updated_at,
@@ -225,8 +260,17 @@ def sync_link(
         session.flush()
     except Exception as exc:  # keep going for other locations
         # `link` may already be expired by a failed flush, so only use what was read up front.
-        log.exception("sync failed for review_sources.id=%s (%s)", link_id, name)
         err = str(exc)[:2000]
+        try:
+            streak = (link.fail_count or 0) + 1
+        except Exception:
+            streak = 1
+        # A revoked token fails every tick (~72 a day per listing): the full traceback only on
+        # the first failure, when the alert threshold is crossed, and then once a day.
+        if streak in (1, settings.alert_fail_threshold) or streak % 72 == 0:
+            log.exception("sync failed for review_sources.id=%s (%s), failure #%d", link_id, name, streak)
+        else:
+            log.warning("sync failed again for review_sources.id=%s (%s), failure #%d: %s", link_id, name, streak, err[:200])
         try:
             # Keep whatever this pull already wrote and record the failure beside it.
             _note_failure(link, run, err)
@@ -239,8 +283,7 @@ def sync_link(
             log.warning("session unusable after sync failure of review_sources.id=%s; rolling back", link_id)
             session.rollback()
             link = session.get(ReviewSourceLink, link_id)
-            run = SyncRun(source_link_id=link_id, full=full, started_at=started,
-                          reviews_seen=0, reviews_new=0, reviews_updated=0)
+            run = session.get(SyncRun, run_id) or SyncRun(source_link_id=link_id, full=full, started_at=started)
             session.add(run)
             _note_failure(link, run, err)
             session.flush()

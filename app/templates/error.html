@@ -1,0 +1,9 @@
+{% extends "base.html" %}{% block title %}{{ title }} · Review Manager{% endblock %}
+{% block content %}
+<div class="card" style="max-width:560px;margin:48px auto;text-align:center">
+  <div class="eyebrow muted small" style="letter-spacing:.18em;text-transform:uppercase">Error {{ code }}</div>
+  <h1 style="margin:6px 0 10px">{{ title }}</h1>
+  {% if detail %}<p class="ink2">{{ detail }}</p>{% endif %}
+  <p style="margin-top:18px">{% if user %}<a href="/">Back to the inbox</a> · <a href="javascript:history.back()">Go back</a>{% else %}<a href="/login">Sign in</a>{% endif %}</p>
+</div>
+{% endblock %}

@@ -28,12 +28,13 @@ POSTED_WITHIN = timedelta(days=14)    # ... and so is anything the customer post
 @dataclass
 class AlertBatch:
     negatives: List[Review] = field(default_factory=list)
+    lowered: List[Review] = field(default_factory=list)     # an older review whose rating dropped into negative
     removed: List[Review] = field(default_factory=list)
     failing: List[ReviewSourceLink] = field(default_factory=list)
 
     @property
     def count(self) -> int:
-        return len(self.negatives) + len(self.removed) + len(self.failing)
+        return len(self.negatives) + len(self.lowered) + len(self.removed) + len(self.failing)
 
     @property
     def empty(self) -> bool:
@@ -53,8 +54,17 @@ def collect(session: Session, now: Optional[datetime] = None) -> AlertBatch:
         batch.negatives = list(session.execute(
             select(Review).join(ReviewSourceLink).where(
                 ReviewSourceLink.active.is_(True), Review.is_deleted.is_(False), Review.alerted_at.is_(None),
+                Review.has_owner_reply.is_(False),            # already answered before we first saw it: not news
                 Review.rating <= settings.negative_rating_max, Review.first_seen_at >= now - NEW_WITHIN,
                 Review.created_at_source >= now - POSTED_WITHIN).options(*opts).order_by(Review.created_at_source)).scalars().all())
+        # A review that was fine and is now negative (5★ lowered to 1★), however old it is.
+        seen = {r.id for r in batch.negatives}
+        batch.lowered = [r for r in session.execute(
+            select(Review).join(ReviewSourceLink).where(
+                ReviewSourceLink.active.is_(True), Review.is_deleted.is_(False), Review.alerted_at.is_(None),
+                Review.rating <= settings.negative_rating_max, Review.prev_rating > settings.negative_rating_max,
+                Review.rating_changed_at >= now - NEW_WITHIN).options(*opts).order_by(Review.rating_changed_at)).scalars().all()
+            if r.id not in seen]
     batch.removed = list(session.execute(
         select(Review).join(ReviewSourceLink).where(
             ReviewSourceLink.active.is_(True), Review.is_deleted.is_(True), Review.removed_at.isnot(None),
@@ -70,6 +80,8 @@ def subject_for(batch: AlertBatch) -> str:
     parts = []
     if batch.negatives:
         parts.append(f"{len(batch.negatives)} new negative review{'s' if len(batch.negatives) != 1 else ''}")
+    if batch.lowered:
+        parts.append(f"{len(batch.lowered)} rating{'s' if len(batch.lowered) != 1 else ''} lowered")
     if batch.removed:
         parts.append(f"{len(batch.removed)} review{'s' if len(batch.removed) != 1 else ''} removed")
     if batch.failing:
@@ -90,6 +102,10 @@ def render_text(batch: AlertBatch) -> str:
     lines = [subject_for(batch), ""]
     for r in batch.negatives:
         lines.append(f"NEW {r.rating}* at {r.location.name if r.location else r.source_link.display_name} - {r.author_name or 'Anonymous'} {loc(r.created_at_source)}")
+        lines.append(f"    {(r.text or '(rating only)')[:300]}")
+        lines.append(f"    {settings.app_base_url}/reviews/{r.id}")
+    for r in batch.lowered:
+        lines.append(f"LOWERED {r.prev_rating}* -> {r.rating}* at {r.location.name if r.location else r.source_link.display_name} - {r.author_name or 'Anonymous'}")
         lines.append(f"    {(r.text or '(rating only)')[:300]}")
         lines.append(f"    {settings.app_base_url}/reviews/{r.id}")
     for r in batch.removed:
@@ -119,6 +135,9 @@ def send_alerts(session: Session, dry_run: bool = False, to_override: Optional[L
     for r in batch.negatives:
         r.alerted_at = now
         record(session, r, "alert_sent", at=now, what="new_negative", to=len(to))
+    for r in batch.lowered:
+        r.alerted_at = now
+        record(session, r, "alert_sent", at=now, what="rating_lowered", to=len(to))
     for r in batch.removed:
         r.removal_notified_at = now
         record(session, r, "alert_sent", at=now, what="removed", to=len(to))

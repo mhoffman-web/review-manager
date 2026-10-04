@@ -173,3 +173,51 @@ def test_login_throttle_resists_spoofing_and_lockout(monkeypatch):
     auth._failures["ep:stale|x"] = [old]
     auth._prune(auth._time.time())
     assert "ep:stale|x" not in auth._failures
+
+
+def test_validation_gaps_and_error_pages(monkeypatch):
+    import json, time
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+    from app import auth
+    from app.db import SessionLocal, engine, init_db
+    from app.models import Base, ReplyTemplate, SavedView, User
+    from app.web import app
+    Base.metadata.drop_all(engine); init_db()
+    s = SessionLocal()
+    admin = User(email="admin@x.com", name="   ", password_hash=auth.hash_password("dev-password-admin-2026"), role="admin")
+    s.add(admin); s.commit()
+    assert admin.first_name == "admin"                       # blank name no longer crashes .split()[0]
+    # String(n) columns are truncated on write, so Postgres never 500s on a long value
+    t = ReplyTemplate(name="x" * 500, body="hi"); s.add(t); s.commit()
+    assert len(s.get(ReplyTemplate, t.id).name) == ReplyTemplate.__table__.c.name.type.length
+    # bcrypt's 72-byte limit is a friendly message, never a crash
+    assert "72" in auth.password_problem("é" * 40)
+    assert auth.verify_password("a" * 100, admin.password_hash) is False
+    c = TestClient(app)
+    c.post("/login", data={"email": "admin@x.com", "password": "dev-password-admin-2026"})
+    assert c.get("/?page=0").status_code == 200 and c.get("/?page=-5").status_code == 200
+    # a shared saved view with junk JSON cannot break the inbox
+    v = SavedView(name="bad", owner_id=admin.id, is_shared=True, params_json=json.dumps([1, 2, {"q": None}])); s.add(v)
+    v2 = SavedView(name="bad2", owner_id=admin.id, is_shared=True, params_json=json.dumps({"view": {"x": 1}, "brands": "WashU", "days": "abc"})); s.add(v2)
+    s.commit()
+    assert c.get(f"/?sv={v.id}").status_code == 200 and c.get(f"/?sv={v2.id}").status_code == 200
+    # unknown platform, unknown category, bad role
+    r = c.post("/admin/sites/listing", data={"source": "myspace", "external_location_id": "1"})
+    assert r.status_code == 400 and "Unknown platform" in r.text and 'nav class="top"' in r.text
+    c.post("/admin/users", data={"email": "new@x.com", "name": "", "role": "superuser"})
+    nu = s.execute(select(User).where(User.email == "new@x.com")).scalar_one()
+    assert nu.role == "agent" and nu.name == "new"
+    # error pages keep the frame and escape the detail
+    r = c.get("/reviews/999999")
+    assert r.status_code == 404 and 'nav class="top"' in r.text and "Back to the inbox" in r.text
+    r = c.post("/reviews/999999/note", data={"note": "x"})
+    assert r.status_code == 404
+    r = c.post("/views", data={})
+    assert r.status_code == 422 and "Please fill in" in r.text and "name" in r.text
+    # absolute session lifetime: an old sign-in is refused even if renewed recently
+    old = auth._serializer.dumps({"uid": admin.id, "iat": int(time.time()) - 8 * 86400})
+    assert auth.read_session(old) == (None, None)
+    fresh = auth.make_session_cookie(admin)
+    assert auth.read_session(fresh)[0] == admin.id
+    s.close()

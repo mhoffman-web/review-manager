@@ -456,3 +456,38 @@ def test_morning_report_is_tracked_per_edition(db, monkeypatch):
     # a brand-new install never sends a backlog
     s.query(ReportSend).delete(); s.commit()
     assert reports.missed_report_date(s, date(2026, 10, 7)) is None
+
+
+def test_alert_gaps_legacy_recipients_and_groups(db):
+    from app.alerts import collect
+    from app.db import _backfill_recipient_editions
+    from app.models import ReportRecipient, SiteGroup
+    s, link = db
+    # answered before we ever saw it: not alerted. Unanswered: alerted.
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("ans", 1, "bad", 0.2, reply="sorry"), nr("open", 2, "meh", 0.2),
+                                                        nr("old5", 5, "great", 30)])); s.commit()
+    assert {r.external_id for r in collect(s).negatives} == {"open"}
+    # a month-old 5-star lowered to 1-star is alerted as "lowered"
+    sync_link(s, link, full=True, adapter=FakeAdapter([nr("old5", 1, "great until it scratched my car", 30)])); s.commit()
+    b = collect(s)
+    assert [r.external_id for r in b.lowered] == ["old5"] and b.lowered[0].prev_rating == 5
+    from app.alerts import render_html, subject_for
+    assert "1 rating lowered" in subject_for(b) and "Rating lowered 5★ → 1★" in render_html(b)
+    # legacy recipients: brands decide the edition once
+    s.add_all([ReportRecipient(email="a@x.com", edition="all", brands="WashU"), ReportRecipient(email="b@x.com", edition="all", brands="ICON;WA"),
+               ReportRecipient(email="c@x.com", edition="all", brands="WashU;ICON"), ReportRecipient(email="d@x.com", edition="il")])
+    s.commit()
+    _backfill_recipient_editions(); s.expire_all()
+    got = {r.email: r.edition for r in s.query(ReportRecipient).all()}
+    assert got == {"a@x.com": "il", "b@x.com": "tn", "c@x.com": "all", "d@x.com": "il"}
+    # the inbox quick-create never overwrites a shared group
+    from fastapi.testclient import TestClient
+    from app import auth
+    from app.web import app
+    u = s.query(User).first(); u.password_hash = auth.hash_password("pw-long-enough-123"); s.commit()
+    g = SiteGroup(name="North"); g.locations = [link.location]; s.add(g); s.commit()
+    c = TestClient(app); c.post("/login", data={"email": u.email, "password": "pw-long-enough-123"})
+    r = c.post("/groups", data={"name": "north", "location_ids": "999", "back": "/"}, follow_redirects=False)
+    assert "already+exists" in r.headers["location"]
+    s.expire_all()
+    assert [l.id for l in s.get(SiteGroup, g.id).locations] == [link.location.id]

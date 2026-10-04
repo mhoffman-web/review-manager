@@ -4,7 +4,7 @@
 <div class="grid side">
 <div>
   <div class="card table-scroll" style="padding:0"><table><thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-  {% for k in keys %}<tr style="{% if not k.active %}opacity:.55{% endif %}"><td>{{ k.name }}{% if not k.active %} <span class="pill small">revoked</span>{% endif %}</td><td class="muted"><code>{{ k.prefix }}…</code></td><td class="ink2">{{ k.created_at|local('%b %-d, %Y') }}{% if k.created_by %} · {{ k.created_by.name.split()[0] }}{% endif %}</td><td class="ink2">{{ k.last_used_at|local if k.last_used_at else 'never' }}</td>
+  {% for k in keys %}<tr style="{% if not k.active %}opacity:.55{% endif %}"><td>{{ k.name }}{% if not k.active %} <span class="pill small">revoked</span>{% endif %}</td><td class="muted"><code>{{ k.prefix }}…</code></td><td class="ink2">{{ k.created_at|local('%b %-d, %Y') }}{% if k.created_by %} · {{ k.created_by.first_name }}{% endif %}</td><td class="ink2">{{ k.last_used_at|local if k.last_used_at else 'never' }}</td>
     <td>{% if k.active %}<form method="post" action="/admin/api/{{ k.id }}/revoke" onsubmit="return confirm('Revoke this key? Anything using it stops working.')"><button class="ghost small">Revoke</button></form>{% endif %}</td></tr>
   {% else %}<tr><td colspan="5" class="muted" style="padding:24px;text-align:center">No API keys yet.</td></tr>{% endfor %}</tbody></table></div>
   <div class="card"><h3>Endpoints</h3>

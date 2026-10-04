@@ -2,11 +2,11 @@
 <body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2328;font-size:15px;line-height:1.45">
 <div style="max-width:680px;margin:0 auto;padding:20px">
   <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#009ace">Review Manager · instant alert</p>
-  <h2 style="margin:0 0 14px">{% if b.negatives %}{{ b.negatives|length }} new negative review{{ '' if b.negatives|length==1 else 's' }}{% endif %}{% if b.negatives and (b.removed or b.failing) %} · {% endif %}{% if b.removed %}{{ b.removed|length }} removed{% endif %}{% if b.removed and b.failing %} · {% endif %}{% if b.failing %}{{ b.failing|length }} listing{{ '' if b.failing|length==1 else 's' }} failing to sync{% endif %}</h2>
+  <h2 style="margin:0 0 14px">{% if b.negatives %}{{ b.negatives|length }} new negative review{{ '' if b.negatives|length==1 else 's' }}{% endif %}{% if b.lowered %}{% if b.negatives %} · {% endif %}{{ b.lowered|length }} rating{{ '' if b.lowered|length==1 else 's' }} lowered{% endif %}{% if (b.negatives or b.lowered) and (b.removed or b.failing) %} · {% endif %}{% if b.removed %}{{ b.removed|length }} removed{% endif %}{% if b.removed and b.failing %} · {% endif %}{% if b.failing %}{{ b.failing|length }} listing{{ '' if b.failing|length==1 else 's' }} failing to sync{% endif %}</h2>
 
-  {% for r in b.negatives %}
+  {% for r in b.negatives + b.lowered %}
   <div style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid #b91c1c;border-radius:8px;padding:14px 16px;margin-bottom:12px">
-    <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#b91c1c">New {{ r.rating }}-star review</div>
+    <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#b91c1c">{% if r in b.lowered %}Rating lowered {{ r.prev_rating }}★ → {{ r.rating }}★{% else %}New {{ r.rating }}-star review{% endif %}</div>
     <div style="margin:4px 0 2px"><strong>{{ r.location.name if r.location else r.source_link.display_name }}</strong> <span style="color:#6b7280">· {{ r.author_name or 'Anonymous' }} · {{ to_local(r.created_at_source).strftime('%a %b %-d, %-I:%M %p') }}</span></div>
     <div style="margin:6px 0;{% if r.is_rating_only %}color:#9ca3af;font-style:italic{% endif %}">{{ r.text or 'Rating only, no written review' }}</div>
     {% if r.mention_names %}<div style="font-size:12px;color:#6b7280">Names: {{ r.mention_names|join(', ') }}</div>{% endif %}

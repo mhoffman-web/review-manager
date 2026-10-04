@@ -22,7 +22,7 @@ def _send(user: User, kind: str, link: str, by: str = "") -> bool:
                                                           sso=settings.sso_enabled, domains=settings.sso_allowed_domains)
     if kind == "welcome":
         subject = "Your Review Manager account"
-        text = (f"Hi {user.name.split()[0] if user.name else ''},\n\n{by or 'An administrator'} set up your Review Manager account ({user.email}).\n"
+        text = (f"Hi {user.first_name},\n\n{by or 'An administrator'} set up your Review Manager account ({user.email}).\n"
                 f"Set your password here (link valid 48 hours): {link}\n\n"
                 + (f"If you have a {', '.join(settings.sso_allowed_domains)} Microsoft account you can also just use Sign in with Microsoft at {settings.app_base_url}/login.\n" if settings.sso_enabled else ""))
     else:

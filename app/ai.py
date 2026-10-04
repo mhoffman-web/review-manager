@@ -66,7 +66,10 @@ def draft_reply(review: Review, rules: Optional[Sequence[AiRule]] = None,
     try:
         response = client.messages.create(
             model=settings.ai_model,
-            max_tokens=400,          # replies are deliberately short
+            # Thinking is always on for Opus 5.5 and counts toward max_tokens, so the cap must
+            # leave room for it; the reply itself stays short because the prompt says so.
+            max_tokens=4000,
+            output_config={"effort": "low"},
             system=system,
             messages=[{"role": "user", "content": user}],
         )
@@ -79,6 +82,8 @@ def draft_reply(review: Review, rules: Optional[Sequence[AiRule]] = None,
     if response.stop_reason == "refusal":
         raise AiUnavailable("The model declined to draft this one; write it by hand.")
     text = "".join(block.text for block in response.content if block.type == "text").strip()
+    if response.stop_reason == "max_tokens":
+        raise AiUnavailable("The draft was cut off before it finished; try again or write it by hand.")
     if not text:
         raise AiUnavailable("Empty draft returned")
     return text.strip().strip('"')
@@ -107,7 +112,7 @@ def classify_negative(review: Review, categories: Sequence[str], examples: Optio
             f'- "{(t or "")[:220]}" -> {c}' for t, c in list(examples)[:12])
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     try:
-        response = client.messages.create(model=settings.ai_model, max_tokens=20, system=system,
+        response = client.messages.create(model=settings.ai_model, max_tokens=2000, output_config={"effort": "low"}, system=system,
                                           messages=[{"role": "user", "content": f"Rating: {review.rating} of 5\nReview: {text}"}])
     except anthropic.RateLimitError as exc:
         raise AiUnavailable("Rate limited by the AI service") from exc
@@ -117,6 +122,9 @@ def classify_negative(review: Review, categories: Sequence[str], examples: Optio
         raise AiUnavailable("Could not reach the AI service") from exc
     if response.stop_reason == "refusal":
         raise AiUnavailable("The model declined to classify this review")
+    if response.stop_reason == "max_tokens":
+        # A cut-off answer is "could not classify", never a silent "Unknown".
+        raise AiUnavailable("The classification was cut off before it finished")
     answer = "".join(b.text for b in response.content if b.type == "text").strip().strip(".").strip('"')
     for c in categories:
         if answer.lower() == c.lower():

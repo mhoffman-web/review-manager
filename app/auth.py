@@ -103,11 +103,15 @@ def clear_login_failures(*keys: str, include_account: bool = False) -> None:
 
 
 def hash_password(password: str) -> str:
+    if len(password.encode()) > 72:     # bcrypt's limit; password_problem() tells the person first
+        raise ValueError("password longer than 72 bytes")
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
+        if len(password.encode()) > 72:
+            return False
         return bcrypt.checkpw(password.encode(), password_hash.encode())
     except ValueError:
         return False
@@ -124,8 +128,13 @@ def authenticate(db: Session, email: str, password: str) -> Optional[User]:
     return None
 
 
-def make_session_cookie(user: User) -> str:
-    return _serializer.dumps({"uid": user.id})
+SESSION_ABSOLUTE = max(1, settings.session_max_days) * 86400   # hard cap, however actively it is used
+
+
+def make_session_cookie(user: User, issued_at: Optional[int] = None) -> str:
+    """`iat` is the original sign-in time; renewals carry it forward so a stolen cookie
+    cannot be kept alive forever by using it once an hour."""
+    return _serializer.dumps({"uid": user.id if hasattr(user, "id") else user, "iat": int(issued_at or _time.time())})
 
 
 def read_session_cookie(value: Optional[str]) -> Optional[int]:
@@ -139,9 +148,20 @@ def read_session(value: Optional[str]):
         return None, None
     try:
         data, ts = _serializer.loads(value, max_age=SESSION_MAX_AGE, return_timestamp=True)
+        iat = data.get("iat") or int(ts.timestamp())
+        if _time.time() - iat > SESSION_ABSOLUTE:
+            return None, None
         return data.get("uid"), ts
     except BadSignature:
         return None, None
+
+
+def session_iat(value: Optional[str]) -> Optional[int]:
+    try:
+        data, ts = _serializer.loads(value or "", return_timestamp=True)
+        return data.get("iat") or int(ts.timestamp())
+    except BadSignature:
+        return None
 
 
 def current_user_optional(request: Request, db: Session = Depends(get_db)) -> Optional[User]:
@@ -153,6 +173,7 @@ def current_user_optional(request: Request, db: Session = Depends(get_db)) -> Op
         return None
     if issued is not None and (datetime.now(issued.tzinfo) - issued).total_seconds() > RENEW_AFTER:
         request.state.renew_session_uid = user.id      # web.py middleware re-issues the cookie
+        request.state.renew_session_iat = session_iat(request.cookies.get(COOKIE_NAME))
     return user
 
 
@@ -307,6 +328,8 @@ def verify_password_token(db: Session, token: Optional[str]):
 def password_problem(password: str, confirm: Optional[str] = None) -> Optional[str]:
     if len(password or "") < MIN_PASSWORD:
         return f"Use at least {MIN_PASSWORD} characters."
+    if len((password or "").encode("utf-8")) > 72:
+        return "Use at most 72 characters (fewer if it has accents or emoji)."
     if confirm is not None and password != confirm:
         return "The two passwords do not match."
     return None
