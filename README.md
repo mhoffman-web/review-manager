@@ -264,13 +264,38 @@ the setting to fix.
 
 **Production on Render needs paid plans.** The worker is a background
 service, which the free plan does not offer, and a free web service sleeps
-after 15 idle minutes (which also stops any sync started from the web
-process). `render.production.yaml` is a ready Blueprint for the real
-deployment: a starter web service, a starter worker and a small Postgres
-sharing one generated `SECRET_KEY`. Create it with **New → Blueprint** and
-set the Blueprint path to `render.production.yaml`; Render then asks for the
-secrets marked `sync: false` (APP_BASE_URL, GOOGLE_TOKEN_JSON, SMTP, Microsoft,
-Anthropic). The free `render.yaml` stays the demo only.
+after 15 idle minutes. `render.production.yaml` is the Blueprint for the real
+deployment: a Starter web service, a Starter worker and the smallest paid
+Postgres (with point-in-time recovery).
+
+Go-live steps:
+
+1. Render dashboard → **New → Blueprint** → pick this repo → set the Blueprint
+   file path to `render.production.yaml` → Apply. Render asks for every secret
+   once, on the web service. Fill `APP_BASE_URL` with the web address Render
+   will use (`https://review-manager.onrender.com` unless that name is taken,
+   then copy the real one after the first deploy) and leave the rest blank until
+   you have them. The worker reads the same values from the web service.
+2. Open the web service → **Shell** and run once:
+   ```bash
+   python cli.py seed-locations
+   python cli.py create-user --email you@washucarwash.com --name "Your Name" --admin --invite
+   ```
+   Without SMTP the second command prints the set-password link; open it, set a
+   password, sign in.
+3. As each piece arrives, paste it into the web service's **Environment** tab
+   (Render redeploys both services): SMTP user/password/from, Microsoft
+   client id/secret/tenant ids, `GOOGLE_TOKEN_JSON`, `FACEBOOK_ACCESS_TOKEN`,
+   `ANTHROPIC_API_KEY`.
+4. When Google approves: Admin → Sites & listings → **Discover**, map any
+   unmapped listing, then run a full sync from the Listings page.
+5. Point an uptime monitor at `/health/sync`, add the custom domain under the
+   web service's Settings, then change `APP_BASE_URL` to it.
+
+The worker refuses to start on Render without `APP_BASE_URL` (its email links
+would point at localhost), and both services refuse to start with an unsafe
+configuration; the deploy log names the setting to fix. The free `render.yaml`
+stays the demo only.
 
 Quota note: the v4 reviews endpoint allows hundreds of requests per minute
 once access is approved. 23 listings polled every 20 minutes is about 1% of

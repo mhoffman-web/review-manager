@@ -24,6 +24,12 @@ def _csv(value: Optional[str]) -> List[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
 
+def _base_url(url: str) -> str:
+    """Public address for links in emails: no trailing slash, https when no scheme was given."""
+    url = (url or "").strip().rstrip("/")
+    return url if "://" in url else f"https://{url}"
+
+
 def normalize_database_url(url: str) -> str:
     """Point any Postgres URL at the psycopg 3 driver this app installs.
 
@@ -44,7 +50,7 @@ class Settings:
     database_url: str = normalize_database_url(os.getenv("DATABASE_URL") or "sqlite:///./review_manager.db")
     secret_key: str = os.getenv("SECRET_KEY") or DEFAULT_SECRET_KEY
     # Render sets RENDER_EXTERNAL_URL automatically; APP_BASE_URL overrides it.
-    app_base_url: str = (os.getenv("APP_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000").rstrip("/")
+    app_base_url: str = _base_url(os.getenv("APP_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "http://localhost:8000")
     # DEMO_MODE=true seeds placeholder data on startup when the database is empty (hosted demo only).
     demo_mode: bool = _bool(os.getenv("DEMO_MODE"), False)
     timezone: str = os.getenv("TIMEZONE", "America/Chicago")
@@ -143,6 +149,11 @@ class Settings:
             problems.append("SECRET_KEY is missing, the built-in default, or shorter than 24 characters. Anyone could "
                             "sign their own admin session. Set a long random value, e.g. "
                             "`python -c \"import secrets; print(secrets.token_urlsafe(48))\"`.")
+        if os.getenv("RENDER") and self.is_local:
+            # The worker has no public address of its own: without APP_BASE_URL every link in the
+            # morning report and the alerts would point at localhost.
+            problems.append("APP_BASE_URL is not set, so links in emails would point at localhost. Set it on the "
+                            "web service (e.g. https://review-manager.onrender.com); the worker reads it from there.")
         if self.demo_mode:
             real_source = bool(self.google_token_json or Path(self.google_token_file).exists() or self.facebook_access_token)
             if real_source:

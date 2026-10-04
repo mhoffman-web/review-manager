@@ -243,3 +243,16 @@ def test_cross_site_posts_are_refused():
     assert c.post("/admin/api", data={"name": "y"}, headers={"Referer": "http://testserver/admin/api"}).status_code == 200
     # health: liveness always 200; sync health speaks in status codes
     assert c.get("/health").status_code == 200 and c.get("/health/sync").status_code in (200, 503)
+
+
+def test_base_url_and_render_worker_guard(monkeypatch):
+    from app.config import _base_url, settings as st
+    assert _base_url("review-manager.onrender.com/") == "https://review-manager.onrender.com"
+    assert _base_url("http://localhost:8000") == "http://localhost:8000"
+    monkeypatch.setattr(st, "app_base_url", "http://localhost:8000")
+    monkeypatch.setattr(st, "demo_mode", False)
+    monkeypatch.setattr(st, "secret_key", "x" * 48)
+    monkeypatch.setenv("RENDER", "true")
+    assert any("APP_BASE_URL" in p for p in st.fatal_config_problems())
+    monkeypatch.setattr(st, "app_base_url", "https://review-manager.onrender.com")
+    assert st.fatal_config_problems() == []
