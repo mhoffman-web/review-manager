@@ -274,8 +274,20 @@ def test_templates_use_the_brands_contact_email(env):
     seed_content(s); s.commit()
     billing = s.query(ReplyTemplate).filter_by(name="Sorry – Billing").one()
     damage = s.query(ReplyTemplate).filter_by(name="Sorry – Damage claim").one()
-    billing.body = billing.body.replace("{email}", "support@washucarwash.com")
+    from app.starter_content import _PREVIOUS_V2
+    billing.body = _PREVIOUS_V2["Sorry – Billing"]                     # the earlier long wording, never edited
     damage.body = "Our own wording, support@washucarwash.com"
     s.commit()
     out = seed_content(s); s.commit()
     assert out["templates_updated"] == 1 and "{email}" in billing.body and damage.body == "Our own wording, support@washucarwash.com"
+
+
+def test_starter_templates_are_short_and_make_no_promises():
+    """House rule: under 25 words. And no commitments the business has not agreed to."""
+    import re
+    from app.starter_content import TEMPLATES
+    for name, _b, _l, _h, _t, body, _o in TEMPLATES:
+        filled = (body.replace("{first_name}", "Jordan").replace("{site}", "WashU Evergreen Park")
+                  .replace("{employee}", "Karla and Jared").replace("{email}", "info@washucarwash.com"))
+        assert len(filled.split()) <= 25, (name, len(filled.split()))
+        assert not re.search(r"rewash|refund|credit|free (wash|month)|on us|within .* (day|hour)|guarantee", body, re.I), name
