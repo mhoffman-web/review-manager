@@ -321,8 +321,17 @@ def test_source_and_action_tags(env):
     csv = c.get(f"/export/reviews.csv?view=all&action={follow.id}").text
     assert "Platform" in csv.splitlines()[0] and ",Site,Follow Up," in csv
     # admin: add, rename, retire; retired options stay on reviews but leave the picker
-    c.post("/admin/tags", data={"kind": "action", "name": "Escalated", "color": "bad", "sort_order": 30})
+    c.post("/admin/tags", data={"kind": "action", "name": "Escalated", "color": "bad"})
     esc = s.query(ReviewTag).filter_by(kind="action", name="Escalated").one()
+    def order():
+        s.expire_all()
+        return [t.name for t in s.query(ReviewTag).filter_by(kind="action").order_by(ReviewTag.sort_order, ReviewTag.name)]
+    assert order() == ["Follow Up", "In Process", "Resolved", "Escalated"]          # new options go last
+    c.post(f"/admin/tags/{esc.id}/move", data={"direction": "up"})
+    assert order() == ["Follow Up", "In Process", "Escalated", "Resolved"]
+    c.post(f"/admin/tags/{follow.id}/move", data={"direction": "up"})              # already first: no change
+    c.post(f"/admin/tags/{follow.id}/move", data={"direction": "down"})
+    assert order() == ["In Process", "Follow Up", "Escalated", "Resolved"]
     assert c.post("/admin/tags", data={"kind": "action", "name": "follow up"}, follow_redirects=False).headers["location"].count("already+exists") == 1
     c.post(f"/admin/tags/{follow.id}/toggle"); s.expire_all()
     assert s.get(ReviewTag, follow.id).active is False

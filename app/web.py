@@ -1486,8 +1486,9 @@ def admin_tags(request: Request, user: User = Depends(auth.admin_user), db: Sess
 
 @app.post("/admin/tags")
 def save_tag(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), kind: str = Form(...), name: str = Form(""),
-             color: str = Form("neutral"), sort_order: int = Form(100), id: int = Form(0)):
-    """Add a tag option, or rename / recolour / reorder one (id set)."""
+             color: str = Form("neutral"), id: int = Form(0)):
+    """Add a tag option (it goes to the bottom of its list), or rename / recolour one (id set).
+    Order is changed with the up/down arrows (move_tag)."""
     if kind not in TAG_KINDS:
         raise HTTPException(400, "Unknown tag list")
     name = " ".join(name.split())[:60]
@@ -1496,13 +1497,34 @@ def save_tag(user: User = Depends(auth.admin_user), db: Session = Depends(get_db
     clash = db.execute(select(ReviewTag).where(ReviewTag.kind == kind, func.lower(ReviewTag.name) == name.lower())).scalar_one_or_none()
     if clash and clash.id != id:
         return RedirectResponse(url="/admin/tags?" + urlencode({"msg": f"{TAG_KINDS[kind]} \"{name}\" already exists."}), status_code=303)
-    t = db.get(ReviewTag, id) if id else ReviewTag(kind=kind)
-    if t is None or t.kind != kind:
+    t = db.get(ReviewTag, id) if id else None
+    if id and (t is None or t.kind != kind):
         raise HTTPException(404, "Tag not found")
-    t.name, t.color, t.sort_order = name, (color if color in TAG_COLORS else "neutral"), max(0, min(sort_order, 9999))
+    if t is None:
+        last = db.execute(select(func.max(ReviewTag.sort_order)).where(ReviewTag.kind == kind)).scalar() or 0
+        t = ReviewTag(kind=kind, sort_order=last + 10)
+    t.name, t.color = name, (color if color in TAG_COLORS else "neutral")
     db.add(t)
     db.commit()
     return RedirectResponse(url="/admin/tags?" + urlencode({"msg": f"Saved {TAG_KINDS[kind].lower()} \"{name}\"."}), status_code=303)
+
+
+@app.post("/admin/tags/{tid}/move")
+def move_tag(tid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), direction: str = Form("up")):
+    """Swap an option with its neighbour in the picker order (retired options included, so
+    restoring one puts it back where it was)."""
+    t = db.get(ReviewTag, tid)
+    if t is None:
+        raise HTTPException(404, "Tag not found")
+    rows = db.execute(select(ReviewTag).where(ReviewTag.kind == t.kind).order_by(ReviewTag.sort_order, ReviewTag.name)).scalars().all()
+    i = next(k for k, x in enumerate(rows) if x.id == t.id)
+    j = i - 1 if direction == "up" else i + 1
+    if 0 <= j < len(rows):
+        rows[i], rows[j] = rows[j], rows[i]
+        for n, x in enumerate(rows):          # renumber 10, 20, 30... so ties never stall a move
+            x.sort_order = (n + 1) * 10
+        db.commit()
+    return RedirectResponse(url="/admin/tags", status_code=303)
 
 
 @app.post("/admin/tags/{tid}/toggle")

@@ -1,29 +1,31 @@
 {% extends "base.html" %}{% block title %}Tags · Admin{% endblock %}{% from "_admin_tabs.html" import admin_tabs %}{% from "_stars.html" import tag_pill %}
 {% block content %}{{ admin_tabs('tags') }}
 {% if msg %}<div class="msg ok">{{ msg }}</div>{% endif %}
-<p class="muted small" style="margin:0 0 12px">Two lists the team uses to tag reviews: <strong>Source</strong> is how the review came in, <strong>Action</strong> is what it needs next. Each review carries at most one of each; both are inbox filters and export columns. Retiring an option hides it from the picker but keeps it on reviews that already have it.</p>
-<div class="grid two">
+<p class="muted small" style="margin:0 0 12px">Two lists the team uses to tag reviews: <strong>Source</strong> is how the review came in, <strong>Action</strong> is what it needs next. Each review carries at most one of each; both are inbox filters and export columns. Retiring an option hides it from the picker but keeps it on reviews that already have it. The arrows set the order options appear in the picker; new options go to the bottom.</p>
+<div class="grid two tags-grid">
 {% for kind, label in kinds.items() %}
 <div class="card">
   <h3>{{ label }}</h3>
-  <table><thead><tr><th>Option</th><th class="num">Reviews</th><th>Edit</th><th></th></tr></thead><tbody>
+  <div class="table-scroll"><table><thead><tr><th data-nosort>Order</th><th data-nosort>Option</th><th class="num" data-nosort>Reviews</th><th data-nosort>Edit</th><th data-nosort></th></tr></thead><tbody>
   {% for t in opts[kind] %}<tr style="{% if not t.active %}opacity:.55{% endif %}">
+    <td style="white-space:nowrap">
+      <form method="post" action="/admin/tags/{{ t.id }}/move" style="display:inline"><input type="hidden" name="direction" value="up"><button class="ghost small arrow" aria-label="Move {{ t.name }} up" title="Move up" {% if loop.first %}disabled{% endif %}>▲</button></form>
+      <form method="post" action="/admin/tags/{{ t.id }}/move" style="display:inline"><input type="hidden" name="direction" value="down"><button class="ghost small arrow" aria-label="Move {{ t.name }} down" title="Move down" {% if loop.last %}disabled{% endif %}>▼</button></form>
+    </td>
     <td>{{ tag_pill(t, label) }}{% if not t.active %} <span class="pill small">retired</span>{% endif %}</td>
     <td class="num">{{ counts.get(t.id, 0) }}</td>
     <td><form method="post" action="/admin/tags" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="id" value="{{ t.id }}">
       <input type="text" name="name" value="{{ t.name }}" maxlength="60" required aria-label="Name" style="width:130px">
       <select name="color" aria-label="Colour">{% for c in colors %}<option value="{{ c }}" {% if (t.color or 'neutral') == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
-      <input type="number" name="sort_order" value="{{ t.sort_order }}" min="0" max="9999" aria-label="Order" title="Order in the picker (lower first)" style="width:70px">
       <button class="ghost small">Save</button></form></td>
     <td><form method="post" action="/admin/tags/{{ t.id }}/toggle"><button class="ghost small">{{ 'Retire' if t.active else 'Restore' }}</button></form></td>
-  </tr>{% else %}<tr><td colspan="4" class="muted">No options yet.</td></tr>{% endfor %}
-  </tbody></table>
+  </tr>{% else %}<tr><td colspan="5" class="muted">No options yet.</td></tr>{% endfor %}
+  </tbody></table></div>
   <form method="post" action="/admin/tags" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px">
     <input type="hidden" name="kind" value="{{ kind }}">
     <input type="text" name="name" maxlength="60" required placeholder="New {{ label|lower }}, e.g. {{ 'QR code' if kind == 'source' else 'Escalated' }}" aria-label="New {{ label|lower }}" style="flex:1;min-width:160px">
     <select name="color" aria-label="Colour">{% for c in colors %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
-    <input type="number" name="sort_order" value="{{ ((opts[kind]|map(attribute='sort_order')|max) if opts[kind] else 0) + 10 }}" min="0" max="9999" aria-label="Order" style="width:70px">
     <button class="primary small">Add</button>
   </form>
 </div>

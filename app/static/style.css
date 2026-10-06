@@ -347,3 +347,7 @@ th.sortable { cursor:pointer; } th.sortable:focus-visible { outline:2px solid va
 .mobile-only { display:none; } @media (max-width:760px) { .mobile-only { display:inline-flex; gap:6px; align-items:center; } }
 /* multiselect menus that would run past the right edge open leftwards (set by base.html) */
 details.ms .ms-menu.flip { left:auto; right:0; }
+
+/* admin tag order arrows */
+button.arrow { padding:0 8px; min-width:30px; height:28px; } button.arrow:disabled { opacity:.3; cursor:default; }
+.tags-grid .card { min-width:0; } @media (max-width:1250px) { .grid.tags-grid { grid-template-columns:1fr; } }
