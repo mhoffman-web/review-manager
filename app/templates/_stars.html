@@ -17,7 +17,11 @@
 {% macro change_badge(r) -%}
 {% if r.rating_delta %}<span class="pill small chg {{ 'up' if r.rating_delta > 0 else 'down' }}" title="Rating changed {{ r.rating_changed_at|local }}">was {{ r.prev_rating }}★ → {{ r.rating }}★</span>{% endif %}
 {%- endmacro %}
+{% macro tag_pill(t, kind) -%}
+{% if t %}<span class="pill small tag {{ {'info': 'me', 'warn': 'warn', 'good': 'good', 'bad': 'bad'}.get(t.color, '') }}" title="{{ kind }}: {{ t.name }}{% if not t.active %} (retired){% endif %}">{% if kind == 'Source' %}via {% endif %}{{ t.name }}</span>{% endif %}
+{%- endmacro %}
 {% macro badges(r) -%}
+{{ tag_pill(r.action_tag, 'Action') }}{{ tag_pill(r.source_tag, 'Source') }}
 {% if r.is_deleted %}<span class="pill small bad" title="Stopped appearing on the platform {{ r.removed_at|local }}">No longer on Google</span>{% endif %}
 {{ change_badge(r) }}
 {% if r.was_edited and not r.rating_delta %}<span class="pill small" title="Edited by the reviewer after posting">Updated</span>{% endif %}

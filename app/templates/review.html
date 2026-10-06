@@ -49,10 +49,24 @@
 
   <div class="card"><h3>Activity</h3>
   {% if timeline %}<ol class="timeline">{% for ev in timeline %}<li class="{{ ev.kind }}"><span class="when" title="{{ ev.at|local }}">{{ ev.at|local('%b %-d, %-I:%M %p') }}</span><span class="what"><strong>{{ ev.label }}</strong> <span class="muted">· {{ ev.who }}</span>
-    {% set d = ev.detail %}{% if ev.kind in ['rating_changed'] %}<div class="small">{{ d['from'] }}★ → {{ d['to'] }}★</div>{% elif ev.kind == 'text_changed' %}<div class="small muted">Before: “{{ d.before }}”</div>{% elif ev.kind in ['reply_posted','reply_edited','reply_deleted'] and d.text %}<div class="small quote-lite">{{ d.text }}</div>{% if d.ai %}<span class="pill small">AI draft</span>{% elif d.template %}<span class="pill small">template</span>{% endif %}{% elif ev.kind == 'reply_failed' %}<div class="small" style="color:var(--critical)">{{ d.error }}</div>{% elif ev.kind == 'category_changed' %}<div class="small">{{ d['from'] or '—' }} → {{ d['to'] or '—' }}</div>{% elif ev.kind == 'note_saved' and d.text %}<div class="small muted">{{ d.text }}</div>{% elif ev.kind in ['mention_added','mention_removed'] %}<div class="small">@{{ d.name }}</div>{% elif ev.kind == 'report_outcome' %}<div class="small">{{ d.outcome }}{% if d.note %} · {{ d.note }}{% endif %}</div>{% elif ev.kind == 'reported' and d.note %}<div class="small muted">{{ d.note }}</div>{% elif ev.kind == 'alert_sent' %}<div class="small muted">{{ d.what|replace('_',' ') }} · {{ d.to }} recipient(s)</div>{% endif %}</span></li>{% endfor %}</ol>
+    {% set d = ev.detail %}{% if ev.kind in ['rating_changed'] %}<div class="small">{{ d['from'] }}★ → {{ d['to'] }}★</div>{% elif ev.kind == 'text_changed' %}<div class="small muted">Before: “{{ d.before }}”</div>{% elif ev.kind in ['reply_posted','reply_edited','reply_deleted'] and d.text %}<div class="small quote-lite">{{ d.text }}</div>{% if d.ai %}<span class="pill small">AI draft</span>{% elif d.template %}<span class="pill small">template</span>{% endif %}{% elif ev.kind == 'reply_failed' %}<div class="small" style="color:var(--critical)">{{ d.error }}</div>{% elif ev.kind in ['source_set', 'action_set'] %}<div class="small">{{ d['from'] or '—' }} → {{ d['to'] or '—' }}</div>{% elif ev.kind == 'category_changed' %}<div class="small">{{ d['from'] or '—' }} → {{ d['to'] or '—' }}</div>{% elif ev.kind == 'note_saved' and d.text %}<div class="small muted">{{ d.text }}</div>{% elif ev.kind in ['mention_added','mention_removed'] %}<div class="small">@{{ d.name }}</div>{% elif ev.kind == 'report_outcome' %}<div class="small">{{ d.outcome }}{% if d.note %} · {{ d.note }}{% endif %}</div>{% elif ev.kind == 'reported' and d.note %}<div class="small muted">{{ d.note }}</div>{% elif ev.kind == 'alert_sent' %}<div class="small muted">{{ d.what|replace('_',' ') }} · {{ d.to }} recipient(s)</div>{% endif %}</span></li>{% endfor %}</ol>
   {% else %}<p class="muted small" style="margin:0">Nothing yet. Replies, edits, notes, rating changes and reports will show here.</p>{% endif %}</div>
 </div>
 <div>
+  <div class="card"><h3>Tags</h3>
+    <form method="post" action="/reviews/{{ r.id }}/tags" id="tagForm"><input type="hidden" name="ctx" value="{{ ctx }}">
+      {% for kind, field, current in [('source', 'source_tag_id', r.source_tag), ('action', 'action_tag_id', r.action_tag)] %}
+      <label class="small muted" for="tag-{{ kind }}">{{ 'Source' if kind == 'source' else 'Action needed' }}</label>
+      <select name="{{ field }}" id="tag-{{ kind }}" style="width:100%;margin:4px 0 8px" onchange="this.form.requestSubmit()">
+        <option value="0">— none —</option>
+        {% for t in tag_options[kind] %}<option value="{{ t.id }}" {% if current and current.id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}
+        {% if current and not current.active %}<option value="{{ current.id }}" selected>{{ current.name }} (retired)</option>{% endif %}
+      </select>{% endfor %}
+      <noscript><button class="ghost small">Save tags</button></noscript>
+      {% if r.action_tag and r.action_set_at %}<p class="muted small" style="margin:0">Action set {{ r.action_set_at|local('%b %-d, %-I:%M %p') }}{% if r.action_set_by %} by {{ r.action_set_by.first_name }}{% endif %}.</p>{% endif %}
+      {% if user.is_admin %}<p class="small" style="margin:4px 0 0"><a href="/admin/tags">Edit the tag lists</a></p>{% endif %}
+    </form>
+  </div>
   <div class="card"><h3>Internal</h3>
     <form method="post" action="/reviews/{{ r.id }}/note">
       <label class="small muted" for="catSel">Theme{% if r.category_source == 'manual' %} <span class="pill small">set by hand</span>{% elif r.category_source == 'ai' %} <span class="pill small">AI</span>{% endif %}</label>

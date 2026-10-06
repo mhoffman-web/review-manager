@@ -90,6 +90,8 @@ class Review(Base):
         Index("ix_reviews_link", "source_link_id"),        # daily full pull, per-site pages
         Index("ix_reviews_removed", "removed_at"),
         Index("ix_reviews_alerted", "alerted_at"),
+        Index("ix_reviews_action_tag", "action_tag_id"),
+        Index("ix_reviews_source_tag", "source_tag_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -148,6 +150,11 @@ class Review(Base):
     report_note: Mapped[Optional[str]] = mapped_column(Text)
     # Where the theme came from: keyword / ai / manual. Manual wins and is never overwritten.
     category_source: Mapped[Optional[str]] = mapped_column(String(10))
+    # Team tags (lists managed under Admin -> Tags): how the review came in, and what it needs next.
+    source_tag_id: Mapped[Optional[int]] = mapped_column(ForeignKey("review_tags.id"))
+    action_tag_id: Mapped[Optional[int]] = mapped_column(ForeignKey("review_tags.id"))
+    action_set_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    action_set_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
 
     source_link: Mapped[ReviewSourceLink] = relationship(back_populates="reviews")
     responses: Mapped[List["Response"]] = relationship(back_populates="review", order_by="Response.created_at")
@@ -155,6 +162,9 @@ class Review(Base):
     mentions: Mapped[List["ReviewMention"]] = relationship(back_populates="review", cascade="all, delete-orphan")
     events: Mapped[List["ReviewEvent"]] = relationship(back_populates="review", cascade="all, delete-orphan", order_by="ReviewEvent.at")
     reported_by: Mapped[Optional["User"]] = relationship(foreign_keys=[reported_by_id])
+    source_tag: Mapped[Optional["ReviewTag"]] = relationship(foreign_keys=[source_tag_id])
+    action_tag: Mapped[Optional["ReviewTag"]] = relationship(foreign_keys=[action_tag_id])
+    action_set_by: Mapped[Optional["User"]] = relationship(foreign_keys=[action_set_by_id])
 
     @property
     def rating_delta(self) -> Optional[int]:
@@ -226,6 +236,25 @@ class Response(Base):
     created_by: Mapped[Optional["User"]] = relationship()
 
 
+TAG_KINDS = {"source": "Source", "action": "Action"}
+
+
+class ReviewTag(Base):
+    """One option in a team-managed tag list. kind = "source" (how the review came in: Site,
+    Corporate, Text...) or "action" (what it needs: Follow Up, In Process...). Options are retired
+    (active=False) rather than deleted, so reviews that carry one keep showing it."""
+    __tablename__ = "review_tags"
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_review_tag"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(String(60))
+    color: Mapped[Optional[str]] = mapped_column(String(20))     # neutral / info / warn / good / bad
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ReviewEvent(Base):
     """Activity timeline: everything that happened to a review, by whom, when.
     `actor_id` is None for things the sync noticed (rating changed, removed)."""
@@ -256,7 +285,7 @@ class ReviewEvent(Base):
         "mention_added": "Employee tagged", "mention_removed": "Employee tag removed", "rating_changed": "Reviewer changed the rating",
         "text_changed": "Reviewer edited the text", "removed": "No longer on the platform", "restored": "Back on the platform",
         "reported": "Reported for removal", "report_outcome": "Report outcome recorded", "alert_sent": "Alert emailed",
-        "assigned": "Assigned", "unassigned": "Unassigned",
+        "assigned": "Assigned", "unassigned": "Unassigned", "source_set": "Source set", "action_set": "Action set",
     }
 
     @property

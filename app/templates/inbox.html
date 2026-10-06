@@ -20,6 +20,8 @@
   {{ ms('group_id', 'All groups', groups, grp_f) }}
   {{ ms('location_id', 'All sites', locations, loc_f, dot=True) }}
   {{ ms('rating', 'Any rating', [{'id':5,'name':'5 star'},{'id':4,'name':'4 star'},{'id':3,'name':'3 star'},{'id':2,'name':'2 star'},{'id':1,'name':'1 star'}], rat_f) }}
+  {{ ms('source', 'Any source', tag_options['source'] + [{'id': -1, 'name': 'No source set'}], src_f) }}
+  {{ ms('action', 'Any action', tag_options['action'] + [{'id': -1, 'name': 'No action set'}], act_f) }}
   <span class="sep"></span>
   {{ range_fields(dr, allow_any=True) }}
   <button class="ghost">Apply</button>

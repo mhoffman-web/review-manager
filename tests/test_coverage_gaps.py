@@ -291,3 +291,47 @@ def test_starter_templates_are_short_and_make_no_promises():
                   .replace("{employee}", "Karla and Jared").replace("{email}", "info@washucarwash.com"))
         assert len(filled.split()) <= 25, (name, len(filled.split()))
         assert not re.search(r"rewash|refund|credit|free (wash|month)|on us|within .* (day|hour)|guarantee", body, re.I), name
+
+
+def test_source_and_action_tags(env):
+    from app.models import ReviewEvent, ReviewTag
+    from app.starter_content import seed_content
+    s, c, (il, tn), (l_il, l_tn), admin = env
+    seed_content(s); s.commit()
+    tags = {(t.kind, t.name): t for t in s.query(ReviewTag)}
+    assert {n for k, n in tags if k == "source"} == {"Site", "Corporate", "Text"}
+    assert {n for k, n in tags if k == "action"} == {"Follow Up", "In Process", "Resolved"}
+    a = review(s, l_il, "t1", 1, "bad wash"); b = review(s, l_tn, "t2", 5, "great"); review(s, l_il, "t3", 4, "ok")
+    site, follow = tags[("source", "Site")], tags[("action", "Follow Up")]
+    # set both on a; source only on b
+    r = c.post(f"/reviews/{a.id}/tags", data={"source_tag_id": site.id, "action_tag_id": follow.id}, follow_redirects=False)
+    assert r.status_code == 303 and "Source+and+Action+saved" in r.headers["location"]
+    c.post(f"/reviews/{b.id}/tags", data={"source_tag_id": site.id, "action_tag_id": 0})
+    s.expire_all()
+    a = s.get(Review, a.id)
+    assert a.source_tag.name == "Site" and a.action_tag.name == "Follow Up" and a.action_set_by_id == admin.id
+    assert [(e.kind, e.detail["to"]) for e in a.events if e.kind.endswith("_set")] == [("source_set", "Site"), ("action_set", "Follow Up")]
+    # a tag of the wrong list is refused
+    assert c.post(f"/reviews/{a.id}/tags", data={"source_tag_id": follow.id}).status_code == 400
+    # inbox filters: by action, by "none set", by source; export carries both columns
+    page = c.get(f"/?view=all&action={follow.id}").text
+    assert "bad wash" in page and "great" not in page and "via Site" in page
+    assert "bad wash" not in c.get("/?view=all&action=-1").text
+    assert "1 review" not in c.get(f"/?view=all&source={site.id}").text          # 2 reviews have Site
+    csv = c.get(f"/export/reviews.csv?view=all&action={follow.id}").text
+    assert "Platform" in csv.splitlines()[0] and ",Site,Follow Up," in csv
+    # admin: add, rename, retire; retired options stay on reviews but leave the picker
+    c.post("/admin/tags", data={"kind": "action", "name": "Escalated", "color": "bad", "sort_order": 30})
+    esc = s.query(ReviewTag).filter_by(kind="action", name="Escalated").one()
+    assert c.post("/admin/tags", data={"kind": "action", "name": "follow up"}, follow_redirects=False).headers["location"].count("already+exists") == 1
+    c.post(f"/admin/tags/{follow.id}/toggle"); s.expire_all()
+    assert s.get(ReviewTag, follow.id).active is False
+    review_page = c.get(f"/reviews/{a.id}").text
+    assert "Follow Up (retired)" in review_page and f'value="{esc.id}"' in review_page
+    assert "Escalated" in c.get("/admin/tags").text
+    # API exposes both tags
+    from app.api import hash_key, new_key
+    raw = new_key(); s.add(ApiKey(name="t", prefix=raw[:11], key_hash=hash_key(raw))); s.commit()
+    rows = TestClient(app).get("/api/v1/reviews?range=last7", headers={"X-API-Key": raw}).json()["reviews"]
+    got = {x["reviewer"] + x["text"]: (x["source_tag"], x["action"]) for x in rows}
+    assert ("Site", "Follow Up") in got.values() and ("Site", None) in got.values()

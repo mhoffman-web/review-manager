@@ -96,6 +96,14 @@ review_manager/
   the reply box for a person to read and edit; nothing posts automatically.
   Enable by setting `ANTHROPIC_API_KEY` in `.env` (model via `AI_MODEL`,
   default `claude-opus-5-5`; phones per brand via `BRAND_PHONES`).
+* **Source and Action tags** – two team-managed lists (Admin → Tags). *Source*
+  is how the review came in (starter list: Site, Corporate, Text); *Action* is
+  what it needs next (Follow Up, In Process, Resolved). Each review carries at
+  most one of each, set from the review page; both are inbox filters (including
+  "none set"), saved-view criteria, export columns and API fields, and every
+  change is on the review's activity timeline. Options can be added, renamed,
+  recoloured, reordered or retired at any time; retired options stay on the
+  reviews that have them. `python cli.py seed-content` adds the starter lists.
 * **Archive and Failed** – archive a review you will not answer (stops
   counting as unanswered); a Failed tab appears when a post to Google errors.
 * **More reporting** – rating-only share, monthly summary table, location rank,

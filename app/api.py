@@ -126,7 +126,8 @@ def reviews(db: Session = Depends(get_db), _k: ApiKey = Depends(api_key), range:
     q = (select(Review).join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
          .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
          .where(Review.is_deleted.is_(False), ReviewSourceLink.active.is_(True), Review.created_at_source >= dr.start, Review.created_at_source < dr.end)
-         .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location), selectinload(Review.mentions))
+         .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location), selectinload(Review.mentions),
+                  selectinload(Review.source_tag), selectinload(Review.action_tag))
          .order_by(Review.created_at_source.desc()).limit(limit))
     if [b for b in brand if b]:
         q = q.where(Location.brand.in_([b for b in brand if b]))
@@ -141,7 +142,10 @@ def reviews(db: Session = Depends(get_db), _k: ApiKey = Depends(api_key), range:
                     "reviewer": r.author_name, "posted_at": _local(r.created_at_source), "text": (r.text if include_text else None),
                     "replied": r.has_owner_reply, "replied_at": _local(r.replied_at) if r.has_owner_reply else None,
                     "response_hours": round(r.response_hours, 1) if r.response_hours is not None else None,
-                    "employees": r.mention_names, "theme": r.category, "link": f"{settings.app_base_url}/reviews/{r.id}"})
+                    "employees": r.mention_names, "theme": r.category,
+                    "source_tag": r.source_tag.name if r.source_tag else None,   # "source" above is the platform
+                    "action": r.action_tag.name if r.action_tag else None,
+                    "link": f"{settings.app_base_url}/reviews/{r.id}"})
     return {"range": _range_json(dr), "count": len(out), "reviews": out}
 
 

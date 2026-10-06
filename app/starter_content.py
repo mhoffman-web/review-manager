@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .ai import DEFAULT_RULES
-from .models import AiRule, Location, ReplyTemplate, SavedView, SiteGroup, User
+from .models import AiRule, Location, ReplyTemplate, ReviewTag, SavedView, SiteGroup, User
 
 NEW_ICON = {"ICON Madison", "ICON McMinnville", "ICON Decherd", "ICON Manchester", "ICON Goodlettsville",
             "ICON Thompson Lane", "ICON Charlotte Pike", "ICON Antioch"}
@@ -52,6 +52,11 @@ GROUPS = [
      lambda n: n in {"ICON Antioch", "ICON Goodlettsville", "ICON Madison", "ICON Thompson Lane", "ICON Charlotte Pike", "ICON Nolensville"}),
 ]
 
+TAGS = [  # kind, name, colour, order
+    ("source", "Site", "info", 10), ("source", "Corporate", "neutral", 20), ("source", "Text", "neutral", 30),
+    ("action", "Follow Up", "warn", 10), ("action", "In Process", "info", 20), ("action", "Resolved", "good", 90),
+]
+
 VIEWS = [
     ("LW Negatives", 10, {"view": "negative", "range": "last_week"}),
     ("Yesterday & today", 20, {"view": "all", "days": 1}),
@@ -69,7 +74,12 @@ _LEGACY_BODIES = {name: {body, body.replace("{email}", "support@washucarwash.com
 def seed_content(s: Session, owner_email: str = "") -> Dict[str, int]:
     """Add every starter item that is missing (matched by name/text), and update starter templates
     nobody has edited since they were added. Returns counts."""
-    out = {"templates": 0, "templates_updated": 0, "ai_rules": 0, "groups": 0, "views": 0}
+    out = {"templates": 0, "templates_updated": 0, "ai_rules": 0, "groups": 0, "views": 0, "tags": 0}
+    have_tags = {(t.kind, t.name.lower()) for t in s.execute(select(ReviewTag)).scalars()}
+    for kind, name, color, order in TAGS:
+        if (kind, name.lower()) not in have_tags:
+            s.add(ReviewTag(kind=kind, name=name, color=color, sort_order=order))
+            out["tags"] += 1
     existing = {t.name: t for t in s.execute(select(ReplyTemplate)).scalars()}
     have = set(existing)
     for name, brand, lo, hi, tags, body, order in TEMPLATES:

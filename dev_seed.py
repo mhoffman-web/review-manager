@@ -342,6 +342,19 @@ def main():
             link.avg_rating = round((prior_n * prior_avg + sum(ratings_all)) / tot, 1) if tot else None
             s.add(SyncRun(source_link_id=link.id, started_at=NOW - timedelta(minutes=12), finished_at=NOW - timedelta(minutes=11, seconds=40),
                           status="ok", reviews_seen=min(50, len(ratings_all)), reviews_new=random.randint(0, 3), reviews_updated=random.randint(0, 2)))
+        # Team tags: the starter Source / Action lists, applied to a sample of reviews so the demo shows them.
+        from app.starter_content import seed_content
+        from app.models import ReviewTag
+        seed_content(s)
+        s.flush()
+        tags = {(t.kind, t.name): t for t in s.execute(select(ReviewTag)).scalars()}
+        rng = random.Random(11)
+        for rv in s.execute(select(Review).where(Review.created_at_source >= NOW - timedelta(days=45))).scalars():
+            if rng.random() < 0.35:
+                rv.source_tag_id = tags[("source", rng.choice(["Site", "Site", "Corporate", "Text"]))].id
+            if (rv.rating or 5) <= 3 and rng.random() < 0.6:
+                rv.action_tag_id = tags[("action", rng.choice(["Follow Up", "In Process", "Resolved"]))].id
+                rv.action_set_at, rv.action_set_by_id = rv.created_at_source + timedelta(hours=rng.randint(2, 30)), users["Lily"].id
         print(f"seeded {n} demo reviews across {len(locs)} sites into {settings.database_url}")
 
 

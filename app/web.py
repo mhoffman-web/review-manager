@@ -28,7 +28,7 @@ from .config import ALERTS_KEY, EDITIONS, RECIPIENT_LISTS, settings
 from .events import record
 from .db import get_db, session_scope
 from .models import (AiRule, ApiKey, Employee, Location, ReplyTemplate, ReportRecipient, Response as ReplyRow, Review,
-                     ReviewMention, ReviewSourceLink, SavedView, SiteGroup, SyncRun, User)
+                     ReviewMention, ReviewSourceLink, ReviewTag, SavedView, SiteGroup, SyncRun, User, TAG_KINDS)
 from .daterange import PRESETS, DateRange, resolve_range
 from .reports import (BRAND_COLORS, build_digest, build_trends, disputed_count, employee_report, listing_summaries, location_rank,
                       monthly_summary, rating_distribution, recovery_stats, render_digest_html, responder_stats, window_report)
@@ -442,14 +442,22 @@ VIEWS = [("attention", "Needs attention"), ("unanswered", "Unanswered"), ("negat
 VIEW_KEYS = {k for k, _ in VIEWS}
 
 
+def _tag_filter(column, ids: List[int]):
+    """ids from a tag multi-select; -1 means "none set"."""
+    real = [i for i in ids if i > 0]
+    conds = ([column.in_(real)] if real else []) + ([column.is_(None)] if -1 in ids else [])
+    return or_(*conds) if conds else None
+
+
 def _inbox_query(user: User, view: str, brands: List[str], scope_ids: Optional[List[int]], ratings: List[int], q: str, dr: Optional[DateRange],
-                 overdue_cut: datetime):
+                 overdue_cut: datetime, source_ids: Optional[List[int]] = None, action_ids: Optional[List[int]] = None):
     base = (select(Review)
             .join(ReviewSourceLink, Review.source_link_id == ReviewSourceLink.id)
             .outerjoin(Location, ReviewSourceLink.location_id == Location.id)
             .where(Review.is_deleted.is_(view == "removed"), ReviewSourceLink.active.is_(True))
             .options(selectinload(Review.source_link).selectinload(ReviewSourceLink.location),
                      selectinload(Review.assigned_to), selectinload(Review.mentions),
+                     selectinload(Review.source_tag), selectinload(Review.action_tag),
                      selectinload(Review.responses).selectinload(ReplyRow.created_by)))
     order = (Review.removed_at.desc(),) if view == "removed" else (Review.created_at_source.desc(),)
     open_ = (Review.has_owner_reply.is_(False)) & (Review.is_archived.is_(False))
@@ -479,17 +487,32 @@ def _inbox_query(user: User, view: str, brands: List[str], scope_ids: Optional[L
     if q:
         like = f"%{q}%"
         base = base.where(or_(Review.text.ilike(like), Review.author_name.ilike(like)))
+    for column, ids in ((Review.source_tag_id, source_ids), (Review.action_tag_id, action_ids)):
+        cond = _tag_filter(column, ids or [])
+        if cond is not None:
+            base = base.where(cond)
     return base, order
+
+
+def _tag_options(db: Session, include_inactive: bool = False) -> Dict[str, List[ReviewTag]]:
+    q = select(ReviewTag).order_by(ReviewTag.sort_order, ReviewTag.name)
+    if not include_inactive:
+        q = q.where(ReviewTag.active.is_(True))
+    out: Dict[str, List[ReviewTag]] = {k: [] for k in TAG_KINDS}
+    for t in db.execute(q).scalars():
+        out.setdefault(t.kind, []).append(t)
+    return out
 
 
 @app.get("/", response_class=HTMLResponse)
 def inbox(request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
           view: str = "attention", brand: List[str] = Query([]), location_id: List[str] = Query([]), group_id: List[str] = Query([]),
           rating: List[str] = Query([]), q: str = "", range: str = "", start: str = "", end: str = "", sv: int = 0, page: int = 1,
-          sort: str = "", dir: str = "asc"):
+          sort: str = "", dir: str = "asc", source: List[str] = Query([]), action: List[str] = Query([])):
     per_page = 50
     page = max(1, page)
     brands_f, loc_f, grp_f, rat_f = _strs(brand), _ints(location_id), _ints(group_id), _ints(rating)
+    src_f, act_f = _ints(source), _ints(action)
     saved_views = db.execute(select(SavedView).where(or_(SavedView.is_shared.is_(True), SavedView.owner_id == user.id))
                              .order_by(SavedView.sort_order, SavedView.name)).scalars().all()
     active_view = None
@@ -502,6 +525,8 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
             loc_f = _ints(p.get("location_ids") or ([p["location_id"]] if p.get("location_id") else []))
             grp_f = _ints(p.get("group_ids") or ([p["group_id"]] if p.get("group_id") else []))
             rat_f = _ints(p.get("ratings") or ([p["rating"]] if p.get("rating") else []))
+            src_f = _ints(p.get("sources") or [])
+            act_f = _ints(p.get("actions") or [])
             range = p.get("range", ""); start = p.get("start", ""); end = p.get("end", "")
             if not range and p.get("days"):
                 range = {1: "yesterday", 7: "last7", 30: "last30"}.get(int(p["days"]), "")
@@ -510,7 +535,7 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
     scope_ids = _scope(db, grp_f, loc_f)
     dr = _dr(range, start, end) if (range or start or end) else None
-    base, order = _inbox_query(user, view, brands_f, scope_ids, rat_f, q, dr, overdue_cut)
+    base, order = _inbox_query(user, view, brands_f, scope_ids, rat_f, q, dr, overdue_cut, src_f, act_f)
     dir = "desc" if dir == "desc" else "asc"
     sort_cols = {
         "rating": (Review.rating,), "site": (Location.name,), "author": (Review.author_name,), "created": (Review.created_at_source,),
@@ -538,14 +563,16 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
                               .where(Review.is_deleted.is_(True), ReviewSourceLink.active.is_(True))).scalar(),
     }
     current_params = {"view": view, "brands": brands_f, "location_ids": loc_f, "group_ids": grp_f, "ratings": rat_f, "q": q,
+                      "sources": src_f, "actions": act_f,
                       "range": dr.preset if dr else "", "start": dr.start_date.isoformat() if (dr and dr.is_custom) else "",
                       "end": dr.end_date.isoformat() if (dr and dr.is_custom) else ""}
     # Every value is percent-encoded: a search for "A&W" or "50% off" must survive sorting,
     # paging, export and the review page's prev/next queue.
     qs_parts = [("view", view), ("q", q), ("range", current_params["range"]), ("start", current_params["start"]), ("end", current_params["end"])]
     qs_parts += [("brand", b) for b in brands_f] + [("location_id", i) for i in loc_f] + [("group_id", i) for i in grp_f] + [("rating", i) for i in rat_f]
+    qs_parts += [("source", i) for i in src_f] + [("action", i) for i in act_f]
     qs = urlencode(qs_parts)
-    filtered = bool(q or brands_f or loc_f or grp_f or rat_f or dr)
+    filtered = bool(q or brands_f or loc_f or grp_f or rat_f or dr or src_f or act_f)
     # Queue context: the review page uses it for prev/next within exactly this list.
     ctx = qs + "&" + urlencode({"sort": sort, "dir": dir, "sv": active_view.id if active_view else 0, "page": page})
     # Inline composer: top template suggestions per open review on this page.
@@ -562,7 +589,8 @@ def inbox(request: Request, user: User = Depends(auth.current_user), db: Session
                    view=view, views=VIEWS, brands_f=brands_f, loc_f=loc_f, grp_f=grp_f, rat_f=rat_f, q=q, dr=dr, filtered=filtered,
                    counts=counts, overdue_cut=overdue_cut, saved_views=saved_views, active_view=active_view, qs=qs, ctx=ctx,
                    inline_json=json.dumps(inline), inline=inline, changed_since=changed_since, ai_enabled=settings.ai_enabled,
-                   current_params_json=json.dumps(current_params), sort=sort, dir=dir, **_filter_ctx(db))
+                   current_params_json=json.dumps(current_params), sort=sort, dir=dir, src_f=src_f, act_f=act_f,
+                   tag_options=_tag_options(db), **_filter_ctx(db))
 
 
 @app.post("/groups")
@@ -582,7 +610,7 @@ def create_group(request: Request, user: User = Depends(auth.current_user), db: 
     return RedirectResponse(url=_with_query(_safe_path(back), f"group_id={g.id}"), status_code=303)
 
 
-_VIEW_LIST_KEYS = ("brands", "location_ids", "group_ids", "ratings")
+_VIEW_LIST_KEYS = ("brands", "location_ids", "group_ids", "ratings", "sources", "actions")
 _VIEW_STR_KEYS = ("view", "q", "range", "start", "end", "brand", "location_id", "group_id", "rating", "days")
 
 
@@ -649,7 +677,8 @@ def _queue_ids(db: Session, user: User, ctx: str, view_override: Optional[str] =
         view = "attention"
     dr = _dr(g("range"), g("start"), g("end")) if (g("range") or g("start") or g("end")) else None
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
-    args = (_strs(p.get("brand")), _scope(db, _ints(p.get("group_id")), _ints(p.get("location_id"))), _ints(p.get("rating")), g("q"), dr, overdue_cut)
+    args = (_strs(p.get("brand")), _scope(db, _ints(p.get("group_id")), _ints(p.get("location_id"))), _ints(p.get("rating")), g("q"), dr, overdue_cut,
+            _ints(p.get("source")), _ints(p.get("action")))
     base, order = _inbox_query(user, view, *args)
     if view_override:
         base, _ = _inbox_query(user, view_override, *args)
@@ -742,7 +771,7 @@ def _review_page(request: Request, user: User, db: Session, r: Review, ctx: str 
     others = db.execute(select(Review).join(ReviewSourceLink).where(
         Review.source_link_id == r.source_link_id, Review.id != r.id, Review.is_deleted.is_(False),
         Review.author_name == r.author_name, Review.author_name.isnot(None)).order_by(Review.created_at_source.desc()).limit(5)).scalars().all() if r.author_name else []
-    resp = _render(request, "review.html", user, db, r=r, msg=msg, tpls=tpls, ctx=ctx,
+    resp = _render(request, "review.html", user, db, r=r, msg=msg, tpls=tpls, ctx=ctx, tag_options=_tag_options(db),
                    nav_links=_neighbors(db, r, user, ctx), same_author=others, ai_enabled=settings.ai_enabled,
                    warnings=warnings or [], draft=draft, timeline=_timeline(r), listing=listing_summaries(db).get(r.location.id) if r.location else None)
     resp.status_code = status_code
@@ -907,6 +936,36 @@ def report_review(review_id: int, user: User = Depends(auth.current_user), db: S
     return RedirectResponse(url=f"/reviews/{review_id}?{urlencode({'msg': msg})}", status_code=303)
 
 
+@app.post("/reviews/{review_id}/tags")
+def set_review_tags(review_id: int, request: Request, user: User = Depends(auth.current_user), db: Session = Depends(get_db),
+                    source_tag_id: int = Form(0), action_tag_id: int = Form(0), ctx: str = Form("")):
+    """Set or clear the Source and Action tags (0 = none). Every change is logged on the timeline."""
+    r = _get_review(db, review_id)
+    changed = []
+    for kind, field, new_id in (("source", "source_tag_id", source_tag_id), ("action", "action_tag_id", action_tag_id)):
+        new = db.get(ReviewTag, new_id) if new_id else None
+        if new_id and (new is None or new.kind != kind):
+            raise HTTPException(400, f"Unknown {TAG_KINDS[kind].lower()} tag")
+        old_id = getattr(r, field)
+        if (old_id or 0) == (new_id or 0):
+            continue
+        old = db.get(ReviewTag, old_id) if old_id else None
+        setattr(r, field, new.id if new else None)
+        if kind == "action":
+            r.action_set_at, r.action_set_by_id = datetime.utcnow(), user.id
+        record(db, r, f"{kind}_set", actor_id=user.id, **{"from": old.name if old else None, "to": new.name if new else None})
+        changed.append(TAG_KINDS[kind])
+    db.commit()
+    msg = (" and ".join(changed) + " saved.") if changed else "No change."
+    if _wants_json(request):
+        return JSONResponse({"ok": True, "msg": msg, "source": r.source_tag.name if r.source_tag else None,
+                             "action": r.action_tag.name if r.action_tag else None})
+    q = {"msg": msg}
+    if ctx:
+        q["ctx"] = ctx
+    return RedirectResponse(url=f"/reviews/{review_id}?" + urlencode(q), status_code=303)
+
+
 @app.post("/reviews/{review_id}/mentions")
 def add_mention(review_id: int, name: str = Form(""), user: User = Depends(auth.current_user), db: Session = Depends(get_db)):
     r = _get_review(db, review_id)
@@ -1030,13 +1089,15 @@ def alerts_preview(user: User = Depends(auth.current_user), db: Session = Depend
 
 
 # ----------------------------------------------------------------- exports
-EXPORT_COLUMNS = ["Review id", "Source", "Brand", "Site", "Rating", "Previous rating", "Posted", "Reviewer", "Review", "Our reply", "Replied at",
-                  "Response hours", "Replied by", "Theme", "Employees mentioned", "Status", "Edited", "Removed", "Reported", "Link"]
+EXPORT_COLUMNS = ["Review id", "Platform", "Brand", "Site", "Rating", "Previous rating", "Posted", "Reviewer", "Review", "Our reply", "Replied at",
+                  "Response hours", "Replied by", "Theme", "Employees mentioned", "Status", "Edited", "Removed", "Reported",
+                  "Source", "Action", "Link"]
 
 
-def _export_rows(db: Session, user: User, view: str, brands_f, scope_ids, rat_f, q: str, dr: Optional[DateRange]) -> List[List]:
+def _export_rows(db: Session, user: User, view: str, brands_f, scope_ids, rat_f, q: str, dr: Optional[DateRange],
+                 src_f: Optional[List[int]] = None, act_f: Optional[List[int]] = None) -> List[List]:
     overdue_cut = datetime.utcnow() - timedelta(hours=settings.overdue_hours)
-    base, order = _inbox_query(user, view if view in VIEW_KEYS else "all", brands_f, scope_ids, rat_f, q, dr, overdue_cut)
+    base, order = _inbox_query(user, view if view in VIEW_KEYS else "all", brands_f, scope_ids, rat_f, q, dr, overdue_cut, src_f, act_f)
     rows = db.execute(base.order_by(*order).limit(20000)).scalars().all()
     out = []
     for r in rows:
@@ -1048,6 +1109,7 @@ def _export_rows(db: Session, user: User, view: str, brands_f, scope_ids, rat_f,
                     r.owner_reply_text or "", _local(r.replied_at, "%Y-%m-%d %H:%M") if r.has_owner_reply else "",
                     round(r.response_hours, 1) if r.response_hours is not None else "", by, r.category or "", "; ".join(r.mention_names), status,
                     "yes" if r.was_edited else "", _local(r.removed_at, "%Y-%m-%d") if r.removed_at else "", r.report_status or "",
+                    r.source_tag.name if r.source_tag else "", r.action_tag.name if r.action_tag else "",
                     f"{settings.app_base_url}/reviews/{r.id}"])
     return out
 
@@ -1114,10 +1176,11 @@ def _xlsx_response(name: str, sheets: List) -> RawResponse:
 @app.get("/export/reviews.{fmt}")
 def export_reviews(fmt: str, user: User = Depends(auth.current_user), db: Session = Depends(get_db), view: str = "all",
                    brand: List[str] = Query([]), location_id: List[str] = Query([]), group_id: List[str] = Query([]),
-                   rating: List[str] = Query([]), q: str = "", range: str = "", start: str = "", end: str = ""):
+                   rating: List[str] = Query([]), q: str = "", range: str = "", start: str = "", end: str = "",
+                   source: List[str] = Query([]), action: List[str] = Query([])):
     """Every review matching the inbox filters, one row each. CSV or Excel."""
     brands_f, scope_ids, rat_f, dr = _export_filters(db, brand, location_id, group_id, rating, range, start, end)
-    rows = _export_rows(db, user, view, brands_f, scope_ids, rat_f, q, dr)
+    rows = _export_rows(db, user, view, brands_f, scope_ids, rat_f, q, dr, _ints(source), _ints(action))
     stamp = datetime.now(_tz).strftime("%Y-%m-%d")
     if fmt == "xlsx":
         return _xlsx_response(f"reviews-{stamp}.xlsx", [("Reviews", EXPORT_COLUMNS, rows)])
@@ -1406,6 +1469,52 @@ def delete_recipient(rid: int, user: User = Depends(auth.admin_user), db: Sessio
             db.delete(r)
         db.commit()
     return RedirectResponse(url="/admin/recipients", status_code=303)
+
+
+TAG_COLORS = ["neutral", "info", "warn", "good", "bad"]
+
+
+@app.get("/admin/tags", response_class=HTMLResponse)
+def admin_tags(request: Request, user: User = Depends(auth.admin_user), db: Session = Depends(get_db), msg: str = ""):
+    opts = _tag_options(db, include_inactive=True)
+    counts = {}
+    for col in (Review.source_tag_id, Review.action_tag_id):
+        for tid, n in db.execute(select(col, func.count()).where(col.isnot(None)).group_by(col)).all():
+            counts[tid] = n
+    return _render(request, "admin_tags.html", user, db, opts=opts, kinds=TAG_KINDS, counts=counts, colors=TAG_COLORS, msg=msg)
+
+
+@app.post("/admin/tags")
+def save_tag(user: User = Depends(auth.admin_user), db: Session = Depends(get_db), kind: str = Form(...), name: str = Form(""),
+             color: str = Form("neutral"), sort_order: int = Form(100), id: int = Form(0)):
+    """Add a tag option, or rename / recolour / reorder one (id set)."""
+    if kind not in TAG_KINDS:
+        raise HTTPException(400, "Unknown tag list")
+    name = " ".join(name.split())[:60]
+    if not name:
+        return RedirectResponse(url="/admin/tags?" + urlencode({"msg": "Type a name."}), status_code=303)
+    clash = db.execute(select(ReviewTag).where(ReviewTag.kind == kind, func.lower(ReviewTag.name) == name.lower())).scalar_one_or_none()
+    if clash and clash.id != id:
+        return RedirectResponse(url="/admin/tags?" + urlencode({"msg": f"{TAG_KINDS[kind]} \"{name}\" already exists."}), status_code=303)
+    t = db.get(ReviewTag, id) if id else ReviewTag(kind=kind)
+    if t is None or t.kind != kind:
+        raise HTTPException(404, "Tag not found")
+    t.name, t.color, t.sort_order = name, (color if color in TAG_COLORS else "neutral"), max(0, min(sort_order, 9999))
+    db.add(t)
+    db.commit()
+    return RedirectResponse(url="/admin/tags?" + urlencode({"msg": f"Saved {TAG_KINDS[kind].lower()} \"{name}\"."}), status_code=303)
+
+
+@app.post("/admin/tags/{tid}/toggle")
+def toggle_tag(tid: int, user: User = Depends(auth.admin_user), db: Session = Depends(get_db)):
+    """Retire or restore an option. Retired options stay on the reviews that carry them but are
+    no longer offered when tagging."""
+    t = db.get(ReviewTag, tid)
+    if t is None:
+        raise HTTPException(404, "Tag not found")
+    t.active = not t.active
+    db.commit()
+    return RedirectResponse(url="/admin/tags?" + urlencode({"msg": f"{t.name} {'restored' if t.active else 'retired'}."}), status_code=303)
 
 
 @app.get("/admin/groups", response_class=HTMLResponse)
