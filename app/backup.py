@@ -47,7 +47,7 @@ def dump(path: Path) -> Dict[str, int]:
 
 def restore(path: Path) -> Dict[str, int]:
     """Load a backup into an empty database. Refuses if any table already has rows."""
-    init_db()
+    init_db(seed=False)          # the backup brings its own tag lists
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         data = json.load(fh)
     if data.get("format") != FORMAT:

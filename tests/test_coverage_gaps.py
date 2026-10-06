@@ -335,3 +335,14 @@ def test_source_and_action_tags(env):
     rows = TestClient(app).get("/api/v1/reviews?range=last7", headers={"X-API-Key": raw}).json()["reviews"]
     got = {x["reviewer"] + x["text"]: (x["source_tag"], x["action"]) for x in rows}
     assert ("Site", "Follow Up") in got.values() and ("Site", None) in got.values()
+
+
+def test_starter_tags_appear_on_a_fresh_database(env):
+    from app.models import ReviewTag
+    s, *_ = env                         # env runs init_db on an empty database
+    assert s.query(ReviewTag).count() == 6
+    t = s.query(ReviewTag).filter_by(name="Text").one(); t.active = False
+    s.query(ReviewTag).filter_by(name="Resolved").delete(); s.commit()
+    from app.db import init_db
+    init_db(); s.expire_all()
+    assert s.query(ReviewTag).count() == 5 and s.query(ReviewTag).filter_by(name="Text").one().active is False

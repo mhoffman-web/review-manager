@@ -34,7 +34,7 @@ if settings.database_url.startswith("sqlite"):
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
 
 
-def init_db() -> None:
+def init_db(seed: bool = True) -> None:
     """Create all tables and add any columns the models gained since the
     database was created. Safe to run repeatedly. Additive only: it never
     drops or renames, so a proper migration tool can take over later."""
@@ -43,6 +43,8 @@ def init_db() -> None:
     _add_missing_columns(models.Base)
     _add_missing_indexes(models.Base)
     _backfill()
+    if seed:
+        _seed_tags_if_empty()
 
 
 def _add_missing_indexes(base) -> None:
@@ -71,6 +73,21 @@ def _backfill() -> None:
                    Review.owner_reply_updated_at.isnot(None))
             .values(first_replied_at=Review.owner_reply_updated_at))
     _backfill_recipient_editions()
+
+
+def _seed_tags_if_empty() -> None:
+    """A new install (or the first start after tags were added) gets the starter Source and
+    Action lists. Only when the table is empty: an admin's later edits are never touched."""
+    from sqlalchemy.orm import Session as _S
+    from .models import ReviewTag
+    from .starter_content import TAGS
+    with _S(engine) as s:
+        if s.query(ReviewTag.id).first():
+            return
+        for kind, name, color, order in TAGS:
+            s.add(ReviewTag(kind=kind, name=name, color=color, sort_order=order))
+        s.commit()
+        log.info("tags: added the starter Source and Action lists")
 
 
 def _backfill_recipient_editions() -> None:
